@@ -1,0 +1,16 @@
+utility_agents:
+  - agent_class: CustomAgent
+    agent_name: Trade Navigator Agent
+    agent_description: |
+      A global trade management AI agent that assists
+      trade analysts and logistics managers with
+      trade compliance, duty optimization, and
+      supply chain decisions.
+    config:
+      output_style: plain_text
+
+super_agents: []
+
+orchestrator:
+  agent_list:
+    - agent_name: Trade Navigator Agent
