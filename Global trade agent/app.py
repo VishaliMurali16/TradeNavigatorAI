@@ -1,15 +1,20 @@
 import asyncio
 import concurrent.futures
 import os
+import re
 import threading
 import time
 
-from flask import Flask, render_template_string, redirect, url_for, jsonify
+from flask import Flask, render_template_string, redirect, url_for, jsonify, request
 from dotenv import load_dotenv
 from air import AsyncAIRefinery
 
 from agents_registry import AGENTS, CLUSTERS, get_agent, agents_by_cluster
 from data_simulator import get_kpis, get_alerts, get_tariff_sources, get_tariff_feed
+from fta_simulator import (
+    get_fta_kpis, get_fta_lanes, get_fta_shipments, get_coo_requests,
+    get_roo_assessments, get_qualification_roadmap,
+)
 
 load_dotenv()
 _API_KEY = str(os.getenv("API_KEY"))
@@ -24,22 +29,49 @@ _AI_CACHE_TTL = 60  # seconds
 # AI Integration
 # ---------------------------------------------------------------------------
 
-async def _call_ai(prompt: str) -> str:
+async def _call_ai(system: str, user: str) -> str:
     client = AsyncAIRefinery(api_key=_API_KEY)
     response = await client.chat.completions.create(
-        messages=[{"role": "user", "content": prompt}],
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user",   "content": user},
+        ],
         model="Qwen/Qwen3-32B",
     )
     return response.choices[0].message.content
 
 
-def _run_ai_in_thread(prompt: str) -> str:
+def _run_ai_in_thread(system: str, user: str) -> str:
     """Run async AI call in a fresh event loop on a background thread."""
     loop = asyncio.new_event_loop()
     try:
-        return loop.run_until_complete(asyncio.wait_for(_call_ai(prompt), timeout=30))
+        return loop.run_until_complete(asyncio.wait_for(_call_ai(system, user), timeout=30))
     finally:
         loop.close()
+
+
+def _strip_reasoning(text: str) -> str:
+    """Remove model chain-of-thought artifacts before the actual summary.
+
+    Qwen3 thinking models can emit <think>…</think> blocks or plain-text
+    reasoning prefixes.  Strip both so only the clean summary reaches the UI.
+    """
+    # Remove <think>…</think> blocks (Qwen3 extended-thinking format)
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    text = text.strip()
+
+    # Drop leading lines that are clearly internal monologue
+    _reasoning_re = re.compile(
+        r"^(okay[,.]?|let me|the user wants|first[,.]?|i need to|alright[,.]?|"
+        r"sure[,.]?|certainly[,.]?|here'?s?( is)?|to summarize|based on (the|this)|"
+        r"looking at|analyzing|my task is|i'?ll|i will|so[,.]?|now[,.]?)",
+        re.IGNORECASE,
+    )
+    lines = text.splitlines()
+    while lines and _reasoning_re.match(lines[0].strip()):
+        lines.pop(0)
+
+    return "\n".join(lines).strip()
 
 
 def _fallback_summary(context: dict) -> str:
@@ -78,22 +110,36 @@ def generate_ai_explanation(context: dict) -> str:
 
         _ai_cache["in_flight"] = True
 
-    prompt = (
-        "You are TradeNavigator AI, an expert global trade advisor. "
-        "Based on the following trade KPIs, write a concise 2-sentence executive "
-        "summary of the company's current trade posture, highlighting the biggest "
-        "opportunity and the biggest risk. Be specific with the numbers.\n\n"
-        f"Total duty paid this quarter: ${context.get('total_duty_paid_m', 'N/A')}M\n"
-        f"FTA capture rate: {context.get('fta_capture_rate_pct', 'N/A')}%\n"
-        f"Drawback recovered: ${context.get('drawback_recovered_k', 'N/A')}K\n"
-        f"Open compliance flags: {context.get('open_compliance_flags', 'N/A')}\n"
-        f"Active tariff alerts: {context.get('active_tariff_alerts', 'N/A')}\n"
-        f"Value at risk: ${context.get('value_at_risk_m', 'N/A')}M\n"
+    system_prompt = (
+        "You are TradeNavigator AI, a senior global trade advisor briefing the C-suite.\n"
+        "Your ONLY output is a 3–4 sentence executive trade posture summary. "
+        "Follow these rules exactly:\n"
+        "1. Output ONLY the summary — no thinking, no reasoning steps, no preamble, "
+        "no 'here is the summary', no 'based on the data' opener.\n"
+        "2. Use the exact figures provided. Do not round or invent numbers.\n"
+        "3. Cover one key OPPORTUNITY and one key RISK with brief impact reasoning "
+        "suitable for a CFO or VP of Trade.\n"
+        "4. Tone: confident, direct, boardroom-ready. No hedging. No filler phrases.\n"
+        "Begin the summary immediately with the first word of the first sentence."
+    )
+
+    user_prompt = (
+        "Current trade KPI snapshot:\n"
+        f"- Total duty paid this quarter: ${context.get('total_duty_paid_m', 'N/A')}M\n"
+        f"- FTA capture rate: {context.get('fta_capture_rate_pct', 'N/A')}% of eligible shipments\n"
+        f"- Duty drawback recovered: ${context.get('drawback_recovered_k', 'N/A')}K YTD\n"
+        f"- Open compliance flags: {context.get('open_compliance_flags', 'N/A')}\n"
+        f"- Active tariff alerts: {context.get('active_tariff_alerts', 'N/A')}\n"
+        f"- Value at risk: ${context.get('value_at_risk_m', 'N/A')}M estimated exposure\n\n"
+        "Write the executive trade posture summary now."
     )
 
     def _fetch():
         try:
-            result = _run_ai_in_thread(prompt)
+            raw    = _run_ai_in_thread(system_prompt, user_prompt)
+            result = _strip_reasoning(raw)
+            if not result:
+                result = _fallback_summary(context)
         except Exception:
             result = _fallback_summary(context)
         with _ai_cache["lock"]:
@@ -305,19 +351,21 @@ body {
 .page-header .header-sub { font-size: 0.85rem; color: rgba(255,255,255,0.6); margin-top: 4px; }
 .accent-bar { height: 4px; border-radius: 2px; margin-bottom: 2px; }
 
-/* ── KPI strip ───────────────────────────────────────────────── */
+/* ── KPI grid (2 rows × 3 columns) ──────────────────────────── */
 .kpi-strip {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    grid-template-columns: repeat(3, 1fr);
+    grid-template-rows: auto auto;
     gap: 16px;
     margin-bottom: 28px;
 }
 .kpi-card {
     background: #fff;
     border-radius: 10px;
-    padding: 20px;
+    padding: 20px 20px 24px;
     box-shadow: 0 2px 8px rgba(26,5,51,0.07);
     border-top: 3px solid #A100FF;
+    min-height: 110px;
 }
 .kpi-card.risk    { border-top-color: #F76C6C; }
 .kpi-card.agility { border-top-color: #12B3A3; }
@@ -699,6 +747,519 @@ def control_tower():
         title="Control Tower",
         css=_CSS,
         sidebar=_sidebar_html(""),
+        content=content,
+        scripts=scripts,
+    )
+
+
+# ---------------------------------------------------------------------------
+# FTA & Preferential Trade — API endpoint + dedicated page
+# ---------------------------------------------------------------------------
+
+@app.route("/api/fta/explain", methods=["POST"])
+def api_fta_explain():
+    data         = request.get_json(force=True) or {}
+    shipment_id  = data.get("shipment_id", "")
+    product      = data.get("product", "")
+    hs_code      = data.get("hs_code", "")
+    origin       = data.get("origin", "")
+    destination  = data.get("destination", "")
+    fta_name     = data.get("fta_name", "")
+    est_saving_k = data.get("est_saving_k", 0)
+    ro_status         = data.get("ro_status", "")
+    rvc_pct           = data.get("rvc_pct", 0)
+    rvc_threshold_pct = data.get("rvc_threshold_pct", 0)
+
+    system_prompt = (
+        "You are TradeNavigator AI, an expert FTA compliance advisor. "
+        "Output ONLY a plain-English explanation, 3-4 sentences, no preamble, "
+        "no reasoning steps. Begin immediately with the first word."
+    )
+    # Phrase the RoO sentence precisely to match the computed status.
+    if ro_status == "near-miss":
+        roo_sentence = (
+            f"Its actual RVC is {rvc_pct}%, which falls just {rvc_threshold_pct - rvc_pct} "
+            f"percentage point(s) short of the {rvc_threshold_pct}% threshold required "
+            f"under {fta_name} — a near-miss that could be resolved with targeted "
+            f"sourcing adjustments."
+        )
+    elif ro_status == "qualified":
+        roo_sentence = (
+            f"Its RVC of {rvc_pct}% comfortably clears the {rvc_threshold_pct}% "
+            f"threshold required under {fta_name}."
+        )
+    else:
+        roo_sentence = (
+            f"Its RVC of {rvc_pct}% does not meet the {rvc_threshold_pct}% threshold "
+            f"required under {fta_name}."
+        )
+
+    user_prompt = (
+        f"Explain why shipment {shipment_id} ({product}, HS {hs_code}) from "
+        f"{origin} to {destination} is FTA-eligible under {fta_name}. "
+        f"Rules-of-origin: {roo_sentence} "
+        f"Estimated duty saving: ${est_saving_k}K. "
+        f"State the recommended immediate action. Tone: actionable, CFO-ready."
+    )
+
+    try:
+        raw  = _run_ai_in_thread(system_prompt, user_prompt)
+        text = _strip_reasoning(raw)
+        if not text:
+            raise ValueError("empty response")
+    except Exception:
+        gap = rvc_threshold_pct - rvc_pct
+        if ro_status == "near-miss":
+            text = (
+                f"Shipment {shipment_id} ({product}) falls {gap} percentage point(s) "
+                f"short of the {rvc_threshold_pct}% RVC threshold for {fta_name} — "
+                f"at {rvc_pct}%, a targeted supplier invoice restructuring or minor "
+                f"component substitution could close the gap. The ${est_saving_k}K duty "
+                f"saving makes this a high-priority case; request a revised CoO from "
+                f"the supplier within 5 business days."
+            )
+        else:
+            text = (
+                f"Shipment {shipment_id} ({product}) qualifies for {fta_name} preferential "
+                f"treatment on HS {hs_code}: its RVC of {rvc_pct}% clears the "
+                f"{rvc_threshold_pct}% threshold. Claiming this benefit recovers an "
+                f"estimated ${est_saving_k}K in duty. "
+                f"Immediate action: submit the {fta_name} Certificate of Origin to "
+                f"customs within the current entry window."
+            )
+
+    return jsonify({"explanation": text})
+
+
+@app.route("/agent/fta_preferential")
+def agent_fta_preferential():
+    kpis         = get_fta_kpis()
+    lanes        = get_fta_lanes()
+    shipments    = get_fta_shipments()
+    coo_requests = get_coo_requests()
+    roo_items    = get_roo_assessments()
+    roadmap      = get_qualification_roadmap()
+
+    # ── Header ──────────────────────────────────────────────────────────
+    header_html = (
+        '<a href="/" class="back-link">← Control Tower</a>'
+        '<div class="agent-detail-header" '
+        'style="background: linear-gradient(135deg, #1a0533 0%, #A100FF88 100%);">'
+        '<div style="font-size:2.4rem">\U0001f91d</div>'
+        '<div>'
+        '<div style="font-size:0.7rem;text-transform:uppercase;letter-spacing:1.5px;'
+        'color:#A100FF;font-weight:700;">Value Capture</div>'
+        '<h1 style="font-size:1.5rem;font-weight:700;">'
+        'FTA &amp; Preferential Trade Agent</h1>'
+        '<div style="font-size:0.85rem;color:rgba(255,255,255,0.65);margin-top:4px;">'
+        'Closing the ~23% FTA utilization gap — illustrative benchmarks requiring '
+        'client-specific quantification</div>'
+        '</div></div>'
+    )
+
+    # ── KPI strip (4 cards) ──────────────────────────────────────────────
+    kpi_html = (
+        '<div style="display:grid;grid-template-columns:repeat(4,1fr);'
+        'gap:16px;margin-bottom:28px">'
+        f'<div class="kpi-card" style="border-top:3px solid #A100FF">'
+        f'<div class="kpi-label">Utilization Rate</div>'
+        f'<div class="kpi-value">{kpis["utilization_pct"]}%</div>'
+        f'<div class="kpi-unit">Of eligible shipments</div></div>'
+        f'<div class="kpi-card" style="border-top:3px solid #F76C6C">'
+        f'<div class="kpi-label">Unclaimed Opportunity</div>'
+        f'<div class="kpi-value">${kpis["unclaimed_opportunity_m"]}M</div>'
+        f'<div class="kpi-unit">Duty savings available</div></div>'
+        f'<div class="kpi-card" style="border-top:3px solid #A100FF">'
+        f'<div class="kpi-label">Retroactive Claims</div>'
+        f'<div class="kpi-value">${kpis["retroactive_claims_k"]}K</div>'
+        f'<div class="kpi-unit">Claimable YTD</div></div>'
+        f'<div class="kpi-card" style="border-top:3px solid #F5A623">'
+        f'<div class="kpi-label">CoOs Pending</div>'
+        f'<div class="kpi-value">{kpis["coo_pending"]}</div>'
+        f'<div class="kpi-unit">Supplier requests</div></div>'
+        '</div>'
+    )
+
+    # ── Shared table-header cell style ───────────────────────────────────
+    th = (
+        'style="padding:10px 12px;text-align:left;font-size:0.72rem;'
+        'text-transform:uppercase;letter-spacing:1px;color:#888;font-weight:700;'
+        'background:#faf8fe;position:sticky;top:0"'
+    )
+
+    # ── Lane utilization table ───────────────────────────────────────────
+    lane_rows = ""
+    for lane in lanes:
+        util = lane["utilization_pct"]
+        sc   = "#c0392b" if lane["unclaimed_savings_k"] > 200 else "#1a0533"
+        lane_rows += (
+            '<tr style="border-bottom:1px solid #f5f3fa">'
+            f'<td style="padding:10px 12px;font-size:0.82rem">'
+            f'{lane["origin"]} → {lane["destination"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600">'
+            f'{lane["fta_name"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem">'
+            f'${lane["eligible_value_m"]}M</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem">'
+            f'${lane["claimed_value_m"]}M</td>'
+            f'<td style="padding:10px 12px;font-size:0.78rem;white-space:nowrap;color:#555">'
+            f'<span style="color:#c0392b;font-weight:600">{lane["mfn_rate_pct"]}%</span>'
+            f' MFN → '
+            f'<span style="color:#12B3A3;font-weight:600">{lane["preferential_rate_pct"]}%</span>'
+            f' pref</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem;white-space:nowrap">'
+            f'<div style="background:#e8e0f0;border-radius:3px;height:6px;'
+            f'width:80px;display:inline-block">'
+            f'<div style="background:#A100FF;height:6px;border-radius:3px;'
+            f'width:{util}%"></div></div>'
+            f'<span style="margin-left:6px;font-size:0.75rem">{util}%</span></td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:{sc}">'
+            f'${lane["unclaimed_savings_k"]}K</td>'
+            '</tr>'
+        )
+
+    lane_section = (
+        '<div class="section-card">'
+        '<div class="section-card-header">\U0001f310 FTA Lane Utilization Gap</div>'
+        '<div style="overflow-x:auto;max-height:300px;overflow-y:auto">'
+        '<table style="width:100%;border-collapse:collapse">'
+        f'<thead><tr>'
+        f'<th {th}>Lane</th>'
+        f'<th {th}>FTA Agreement</th>'
+        f'<th {th}>Eligible Value</th>'
+        f'<th {th}>Claimed</th>'
+        f'<th {th}>Rate Differential</th>'
+        f'<th {th}>Utilization</th>'
+        f'<th {th}>Unclaimed Savings</th>'
+        '</tr></thead>'
+        f'<tbody>{lane_rows}</tbody>'
+        '</table></div></div>'
+    )
+
+    # ── Shipment eligibility feed (eligible-unclaimed only) ──────────────
+    ro_styles = {
+        "qualified": "background:#e6fff9;color:#12B3A3",
+        "near-miss": "background:#fff3cd;color:#856404",
+        "fail":      "background:#fde8e8;color:#c0392b",
+    }
+    unclaimed     = [s for s in shipments if s["eligibility"] == "eligible-unclaimed"]
+    shipment_rows = ""
+    for s in unclaimed:
+        row_bg   = "background:#fff8e6;" if s["ro_status"] == "near-miss" else ""
+        ro_badge = ro_styles.get(s["ro_status"], "")
+        sid      = s["shipment_id"]
+        shipment_rows += (
+            f'<tr style="{row_bg}cursor:pointer;border-bottom:1px solid #f5f3fa" '
+            f"onclick=\"fetchFTAExplain(this, '{sid}')\" "
+            f'data-shipment-id="{sid}" '
+            f'data-product="{s["product"]}" '
+            f'data-hs-code="{s["hs_code"]}" '
+            f'data-origin="{s["origin"]}" '
+            f'data-destination="{s["destination"]}" '
+            f'data-fta-name="{s["fta_name"]}" '
+            f'data-value-k="{s["value_k"]}" '
+            f'data-eligibility="{s["eligibility"]}" '
+            f'data-est-saving-k="{s["est_saving_k"]}" '
+            f'data-ro-status="{s["ro_status"]}" '
+            f'data-rvc-pct="{s["rvc_pct"]}" '
+            f'data-rvc-threshold="{s["rvc_threshold_pct"]}">'
+            f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600">{sid}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem">{s["product"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem;font-family:monospace">'
+            f'{s["hs_code"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem">'
+            f'{s["origin"]} → {s["destination"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;'
+            f'color:#A100FF">${s["est_saving_k"]}K</td>'
+            f'<td style="padding:10px 12px">'
+            f'<span style="padding:2px 8px;border-radius:4px;font-size:0.72rem;'
+            f'font-weight:600;{ro_badge}">{s["ro_status"]}</span>'
+            f'<div style="font-size:0.65rem;color:#999;margin-top:3px">'
+            f'{s["rvc_pct"]}% / {s["rvc_threshold_pct"]}% req\'d</div></td>'
+            f'<td style="padding:10px 12px;font-size:0.78rem;color:#A100FF;'
+            f'font-weight:600">▶ Explain</td>'
+            '</tr>'
+        )
+
+    shipment_section = (
+        '<div class="section-card">'
+        '<div class="section-card-header">'
+        '\U0001f4e6 Shipment Eligibility Feed — Eligible / Unclaimed</div>'
+        '<div style="overflow-x:auto">'
+        '<table style="width:100%;border-collapse:collapse">'
+        f'<thead><tr>'
+        f'<th {th}>Shipment</th>'
+        f'<th {th}>Product</th>'
+        f'<th {th}>HS Code</th>'
+        f'<th {th}>Lane</th>'
+        f'<th {th}>Est. Saving</th>'
+        f'<th {th}>RoO Status</th>'
+        f'<th {th}>Action</th>'
+        '</tr></thead>'
+        f'<tbody>{shipment_rows}</tbody>'
+        '</table></div>'
+        '<div id="fta-ai-box" class="ai-summary" '
+        'style="display:none;margin:16px 20px"></div>'
+        '</div>'
+    )
+
+    # ── CoO tracker ─────────────────────────────────────────────────────
+    coo_badge_styles = {
+        "overdue":   "background:#fde8e8;color:#c0392b",
+        "pending":   "background:#fff8e6;color:#856404",
+        "validated": "background:#e6fff9;color:#12B3A3",
+        "received":  "background:#e6f0ff;color:#0050b3",
+    }
+    coo_rows = ""
+    for req in coo_requests:
+        badge = coo_badge_styles.get(req["status"], "")
+        coo_rows += (
+            '<tr style="border-bottom:1px solid #f5f3fa">'
+            f'<td style="padding:10px 12px;font-size:0.82rem">{req["supplier"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem">{req["lane"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem">{req["deadline"]}</td>'
+            f'<td style="padding:10px 12px">'
+            f'<span style="padding:2px 8px;border-radius:4px;font-size:0.72rem;'
+            f'font-weight:600;{badge}">{req["status"]}</span></td>'
+            '</tr>'
+        )
+
+    coo_section = (
+        '<div class="section-card">'
+        '<div class="section-card-header">\U0001f4cb CoO Supplier Tracker</div>'
+        '<table style="width:100%;border-collapse:collapse">'
+        f'<thead><tr>'
+        f'<th {th}>Supplier</th>'
+        f'<th {th}>Lane</th>'
+        f'<th {th}>Deadline</th>'
+        f'<th {th}>Status</th>'
+        '</tr></thead>'
+        f'<tbody>{coo_rows}</tbody>'
+        '</table></div>'
+    )
+
+    # ── RoO Compliance Assessment (collapsible) ──────────────────────────
+    ro_styles_assess = {
+        "qualified": "background:#e6fff9;color:#12B3A3",
+        "near-miss":  "background:#fff3cd;color:#856404",
+        "fail":       "background:#fde8e8;color:#c0392b",
+    }
+    effort_styles = {
+        "Low":    "background:#e6fff9;color:#12B3A3",
+        "Medium": "background:#fff3cd;color:#856404",
+        "High":   "background:#fde8e8;color:#c0392b",
+    }
+    roo_rows = ""
+    for p in roo_items:
+        badge  = ro_styles_assess.get(p["ro_status"], "")
+        gap_cell = (
+            f'<span style="color:#c0392b;font-weight:600">−{p["gap_pct"]} pts</span>'
+            if p["gap_pct"] > 0 else
+            '<span style="color:#12B3A3;font-weight:600">—</span>'
+        )
+        roo_rows += (
+            '<tr style="border-bottom:1px solid #f5f3fa">'
+            f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600">{p["product"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.78rem;font-family:monospace">{p["hs_code"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:#A100FF">{p["fta_name"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.78rem;color:#555">{p["roo_test_type"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem;text-align:center">'
+            f'{p["rvc_pct"]}% / {p["rvc_threshold_pct"]}%</td>'
+            f'<td style="padding:10px 12px;text-align:center">'
+            f'<span style="padding:2px 8px;border-radius:4px;font-size:0.72rem;'
+            f'font-weight:600;{badge}">{p["ro_status"]}</span></td>'
+            f'<td style="padding:10px 12px;text-align:center">{gap_cell}</td>'
+            f'<td style="padding:10px 12px;font-size:0.78rem;color:#666">{p["compliance_note"]}</td>'
+            '</tr>'
+        )
+
+    roo_section = (
+        '<details style="margin-bottom:12px;border-radius:10px;'
+        'box-shadow:0 2px 8px rgba(26,5,51,0.07);background:#fff;overflow:hidden">'
+        '<summary style="padding:14px 20px;font-size:0.8rem;font-weight:700;'
+        'text-transform:uppercase;letter-spacing:1px;border-bottom:1px solid #f0eaf8;'
+        'display:flex;align-items:center;gap:8px;cursor:pointer;list-style:none;'
+        'user-select:none">'
+        '\U0001f4cb RoO Compliance Assessment'
+        '<span style="margin-left:auto;font-size:0.72rem;font-weight:400;'
+        'color:#A100FF;text-transform:none;letter-spacing:0">▼ expand</span>'
+        '</summary>'
+        '<div style="overflow-x:auto;max-height:280px;overflow-y:auto">'
+        '<table style="width:100%;border-collapse:collapse">'
+        f'<thead><tr>'
+        f'<th {th}>Product</th>'
+        f'<th {th}>HS Code</th>'
+        f'<th {th}>FTA</th>'
+        f'<th {th}>RoO Test</th>'
+        f'<th {th}>RVC (Actual / Req\'d)</th>'
+        f'<th {th}>Status</th>'
+        f'<th {th}>Gap</th>'
+        f'<th {th}>Compliance Note</th>'
+        '</tr></thead>'
+        f'<tbody>{roo_rows}</tbody>'
+        '</table></div>'
+        '<div style="padding:8px 16px;font-size:0.68rem;color:#bbb;border-top:1px solid #f0eaf8">'
+        'Illustrative benchmarks — requires client-specific quantification.</div>'
+        '</details>'
+    )
+
+    # ── Qualification Roadmap (collapsible) ──────────────────────────────
+    roadmap_rows = ""
+    for item in roadmap:
+        effort_badge = effort_styles.get(item["effort"], "")
+        sc = "#c0392b" if item["unclaimed_savings_k"] > 200 else "#1a0533"
+        roadmap_rows += (
+            '<tr style="border-bottom:1px solid #f5f3fa">'
+            f'<td style="padding:10px 12px;font-size:0.82rem">{item["lane"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:#A100FF">'
+            f'{item["fta_name"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem">{item["utilization_pct"]}%</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:{sc}">'
+            f'${item["unclaimed_savings_k"]}K</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem">'
+            f'<div style="font-weight:600;color:#1a0533">{item["primary_action"]}</div>'
+            f'<div style="font-size:0.75rem;color:#888;margin-top:2px">{item["secondary_action"]}</div>'
+            '</td>'
+            f'<td style="padding:10px 12px">'
+            f'<span style="padding:2px 8px;border-radius:4px;font-size:0.72rem;'
+            f'font-weight:600;{effort_badge}">{item["effort"]}</span></td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem;white-space:nowrap;color:#555">'
+            f'{item["timeline"]}</td>'
+            '</tr>'
+        )
+
+    roadmap_section = (
+        '<details style="margin-bottom:12px;border-radius:10px;'
+        'box-shadow:0 2px 8px rgba(26,5,51,0.07);background:#fff;overflow:hidden">'
+        '<summary style="padding:14px 20px;font-size:0.8rem;font-weight:700;'
+        'text-transform:uppercase;letter-spacing:1px;border-bottom:1px solid #f0eaf8;'
+        'display:flex;align-items:center;gap:8px;cursor:pointer;list-style:none;'
+        'user-select:none">'
+        '\U0001f5fa Qualification Roadmap — Under-Utilised Lanes'
+        '<span style="margin-left:auto;font-size:0.72rem;font-weight:400;'
+        'color:#A100FF;text-transform:none;letter-spacing:0">▼ expand</span>'
+        '</summary>'
+        '<div style="overflow-x:auto;max-height:280px;overflow-y:auto">'
+        '<table style="width:100%;border-collapse:collapse">'
+        f'<thead><tr>'
+        f'<th {th}>Lane</th>'
+        f'<th {th}>FTA</th>'
+        f'<th {th}>Utilization</th>'
+        f'<th {th}>Opportunity</th>'
+        f'<th {th}>Recommended Actions</th>'
+        f'<th {th}>Effort</th>'
+        f'<th {th}>Timeline</th>'
+        '</tr></thead>'
+        f'<tbody>{roadmap_rows}</tbody>'
+        '</table></div>'
+        '<div style="padding:8px 16px;font-size:0.68rem;color:#bbb;border-top:1px solid #f0eaf8">'
+        'Opportunity figures sourced from FTA Lane Utilization Gap table — same formula. '
+        'Illustrative benchmarks — requires client-specific quantification.</div>'
+        '</details>'
+    )
+
+    # ── Compose page ─────────────────────────────────────────────────────
+    content = (
+        header_html + kpi_html
+        + '<div style="display:flex;gap:20px;align-items:flex-start;margin-bottom:20px">'
+        + f'<div style="flex:3;min-width:0">{lane_section}{shipment_section}</div>'
+        + f'<div style="flex:2;min-width:0">{coo_section}</div>'
+        + '</div>'
+        + roo_section
+        + roadmap_section
+    )
+
+    # ── Scripts ──────────────────────────────────────────────────────────
+    scripts = """
+<script>
+function fetchFTAExplain(row, shipmentId) {
+    var box = document.getElementById('fta-ai-box');
+    if (!box) return;
+    var payload = {
+        shipment_id:  row.dataset.shipmentId,
+        product:      row.dataset.product,
+        hs_code:      row.dataset.hsCode,
+        origin:       row.dataset.origin,
+        destination:  row.dataset.destination,
+        fta_name:     row.dataset.ftaName,
+        value_k:      parseFloat(row.dataset.valueK),
+        eligibility:  row.dataset.eligibility,
+        est_saving_k: parseFloat(row.dataset.estSavingK),
+        ro_status:        row.dataset.roStatus,
+        rvc_pct:          parseFloat(row.dataset.rvcPct),
+        rvc_threshold_pct: parseFloat(row.dataset.rvcThreshold)
+    };
+    box.style.display = 'flex';
+    box.innerHTML = '<div class="ai-icon">\U0001f916</div><div>'
+        + '<div class="ai-label">AI FTA Advisor</div>'
+        + '<div class="ai-text"><span class="ai-loading">Analyzing '
+        + shipmentId + '…</span></div></div>';
+    fetch('/api/fta/explain', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        box.innerHTML = '<div class="ai-icon">\U0001f916</div><div>'
+            + '<div class="ai-label">AI FTA Analysis — ' + shipmentId + '</div>'
+            + '<div class="ai-text">'
+            + data.explanation.replace(/\\n/g, '<br>') + '</div></div>';
+        box.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+    })
+    .catch(function() {
+        box.innerHTML = '<div class="ai-icon">\U0001f916</div><div>'
+            + '<div class="ai-label">AI FTA Advisor</div>'
+            + '<div class="ai-text">Analysis unavailable — please try again.'
+            + '</div></div>';
+    });
+}
+
+(function() {
+  function loadTariffFeed() {
+    fetch('/api/tariff-feed')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var sc = document.getElementById('sources-container');
+        if (sc && data.sources.length > 0) {
+          var h = '<div class="sources-title">Source Monitoring</div>';
+          data.sources.forEach(function(s) {
+            h += '<div class="source-row">'
+               + '<span class="source-icon">' + s.icon + '</span>'
+               + '<span class="source-name">' + s.name + '</span>'
+               + '<span class="source-badge">' + s.status + '</span></div>';
+          });
+          sc.innerHTML = h;
+        }
+        var fc = document.getElementById('tariff-feed-container');
+        if (fc && data.feed.length > 0) {
+          var h2 = '<div class="feed-section-label">Recent Feed</div>';
+          data.feed.forEach(function(ev) {
+            h2 += '<div class="tariff-event">'
+               + '<div class="tariff-event-header">'
+               + '<div class="tariff-headline">' + ev.headline + '</div>'
+               + '<span class="tariff-status-badge status-' + ev.status + '">'
+               + ev.status + '</span></div>'
+               + '<div class="tariff-time">' + ev.time_short + '</div>'
+               + '<div class="tariff-detail">' + ev.detail + '</div>'
+               + '<div class="tariff-source">via ' + ev.source + '</div></div>';
+          });
+          fc.innerHTML = h2;
+        }
+      })
+      .catch(function(e) { console.error('Tariff feed error:', e); });
+  }
+  loadTariffFeed();
+  setInterval(loadTariffFeed, 10000);
+})();
+</script>
+"""
+
+    return render_template_string(
+        BASE,
+        title="FTA & Preferential Trade Agent",
+        css=_CSS,
+        sidebar=_sidebar_html("fta_preferential"),
         content=content,
         scripts=scripts,
     )

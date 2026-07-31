@@ -6,7 +6,7 @@ AGENTS = [
         "cluster_color": "#A100FF",
         "icon": "🤝",
         "tagline": "Identify and apply qualifying Free Trade Agreement benefits across shipments.",
-        "status": "coming_soon",
+        "status": "live",
     },
     {
         "id": "ai_classification",
