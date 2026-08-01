@@ -1,5 +1,6 @@
 import asyncio
 import concurrent.futures
+import logging
 import os
 import threading
 import time
@@ -19,6 +20,133 @@ app = Flask(__name__)
 # Cache so repeated refreshes never trigger a second AI call
 _ai_cache: dict = {"text": None, "ts": 0.0, "lock": threading.Lock(), "in_flight": False}
 _AI_CACHE_TTL = 60  # seconds
+
+_log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Aggregator agent — shared singleton, warmed at startup
+# ---------------------------------------------------------------------------
+
+_aggregator = None   # AggregatorAgent | None; set by _boot_aggregator if feed.enabled
+_agg_max_entries: int = 25
+
+_tariff_shock_agent = None   # TariffShockAgent | None; set by _boot_tariff_shock
+
+
+def _boot_tariff_shock(scheduler) -> None:
+    """
+    Construct TariffShockAgent and subscribe it to the scheduler.
+
+    Called from _boot_aggregator()'s warm-up thread, after the store warm-up and
+    before scheduler.start(), so no rate-change events are missed.
+
+    Single-switch rollback (Adjustment 1):
+        tariff_shock.enabled=false  -> this function returns early
+                                    -> _tariff_shock_agent stays None
+                                    -> agent_detail() renders inactive placeholder
+        No registry-status flip is needed to roll back — the flag alone controls it.
+        Setting enabled=true re-activates by restarting the app.
+    """
+    global _tariff_shock_agent
+    try:
+        import yaml
+        from tariff_shock.agent import TariffShockAgent
+
+        with open("config.yaml") as _f:
+            _cfg = yaml.safe_load(_f)
+
+        ts_cfg = _cfg.get("tariff_shock", {})
+        if not ts_cfg.get("enabled", False):
+            _log.info(
+                "TariffShockAgent disabled (tariff_shock.enabled=false) "
+                "— tab will render inactive placeholder"
+            )
+            return
+
+        stub_volumes = {
+            k: float(v) for k, v in ts_cfg.get("stub_volumes", {}).items()
+        }
+        agent = TariffShockAgent(stub_volumes=stub_volumes)
+        scheduler.subscribe(agent.on_rate_change)
+        _tariff_shock_agent = agent
+        _log.info(
+            "TariffShockAgent started (%d stub lane(s)): %s",
+            len(stub_volumes), list(stub_volumes.keys()),
+        )
+    except Exception:
+        _log.exception("TariffShockAgent boot failed — tab will render inactive placeholder")
+
+
+def _boot_aggregator() -> None:
+    """
+    Construct the shared AggregatorAgent and start the scheduler.
+
+    Called once at module load.  The HTTP warm-up (refresh_lanes) runs on a
+    daemon thread so Flask starts immediately and is never blocked by live
+    connector calls.
+
+    Startup-race behaviour (adjustment 4):
+        _aggregator is set synchronously before the background thread fires.
+        If the route is hit during warm-up, recent_feed() calls list_recent()
+        on an empty store and returns [].  The route then falls back to the
+        simulator — never a 500.
+
+    File-backed store (adjustment 2):
+        db_path comes from aggregator.store.db_path in config.yaml
+        ("aggregator/data/rates.db") — never ":memory:".  RateStore opens a
+        fresh sqlite3 connection per call (the WAL else-branch), so the
+        scheduler thread (writer) and the route thread (reader) never share a
+        connection object.  WAL allows them to proceed concurrently.
+    """
+    global _aggregator, _agg_max_entries
+    try:
+        import yaml
+        from aggregator.aggregator_agent import AggregatorAgent
+        from aggregator.scheduler import RateScheduler
+
+        with open("config.yaml") as _f:
+            _cfg = yaml.safe_load(_f)
+
+        agg_cfg = _cfg.get("aggregator", {})
+        feed_cfg = agg_cfg.get("feed", {})
+
+        if not feed_cfg.get("enabled", False):
+            _log.info("Aggregator feed disabled (aggregator.feed.enabled=false) — using simulator")
+            return
+
+        _agg_max_entries = int(feed_cfg.get("max_entries", 25))
+        db_path: str = agg_cfg.get("store", {}).get("db_path", "aggregator/data/rates.db")
+        # Adjustment 2 — the store-path line: file-backed, never :memory:
+        lanes: list = agg_cfg.get("refresh", {}).get("lanes", [])
+
+        db_dir = os.path.dirname(db_path)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
+
+        _aggregator = AggregatorAgent(db_path=db_path, config=agg_cfg)
+        scheduler = RateScheduler(_aggregator, config=agg_cfg)
+
+        def _warm_and_start() -> None:
+            try:
+                _aggregator.refresh_lanes(lanes)
+                _log.info("Aggregator: store warmed (%d lane(s))", len(lanes))
+            except Exception:
+                _log.warning(
+                    "Aggregator warm-up incomplete — feed falls back to simulator "
+                    "until the scheduler's first successful run"
+                )
+            # Subscribe TariffShockAgent before the first scheduler tick so no
+            # rate-change events are missed.  Failure here is fully isolated.
+            _boot_tariff_shock(scheduler)
+            scheduler.start()
+
+        threading.Thread(target=_warm_and_start, daemon=True, name="aggregator-warmup").start()
+
+    except Exception:
+        _log.exception("Aggregator boot failed — /api/tariff-feed will use the simulator")
+
+
+_boot_aggregator()
 
 # ---------------------------------------------------------------------------
 # AI Integration
@@ -118,10 +246,40 @@ def api_posture_summary():
 
 @app.route("/api/tariff-feed")
 def api_tariff_feed():
-    """Return live tariff events and source monitoring data."""
-    sources = get_tariff_sources()
-    feed = get_tariff_feed()
-    return jsonify({"sources": sources, "feed": feed})
+    """Return live tariff events and source monitoring data.
+
+    Serves real CanonicalRates from the aggregator store when enabled and
+    non-empty; falls back to the simulator on any error or empty store so
+    the UI is never broken.
+    """
+    if _aggregator is not None:
+        try:
+            feed = _aggregator.recent_feed(_agg_max_entries)
+            if feed:
+                return jsonify({"sources": get_tariff_sources(), "feed": feed})
+        except Exception:
+            _log.exception("Aggregator feed path failed — falling back to simulator")
+    return jsonify({"sources": get_tariff_sources(), "feed": get_tariff_feed()})
+
+
+@app.route("/api/tariff-shock")
+def api_tariff_shock():
+    """Return exposure reports and alerts from the TariffShockAgent.
+
+    When the agent is disabled or not yet initialised, returns an empty payload
+    so the tab can render its inactive placeholder without errors.
+    """
+    if _tariff_shock_agent is None:
+        return jsonify({"enabled": False, "alerts": [], "reports": {}})
+    try:
+        return jsonify({
+            "enabled": True,
+            "alerts":  _tariff_shock_agent.latest_alerts(10),
+            "reports": _tariff_shock_agent.latest_report(),
+        })
+    except Exception:
+        _log.exception("TariffShockAgent feed path failed")
+        return jsonify({"enabled": True, "alerts": [], "reports": {}, "error": "fetch failed"})
 
 
 # ---------------------------------------------------------------------------
@@ -431,6 +589,157 @@ body {
     border-top: 1px solid #e8e0f0;
     font-size: 0.72rem; color: #bbb; text-align: right;
 }
+
+/* ── AI Chat Widget ──────────────────────────────────────────────── */
+.ai-chat-trigger {
+    margin: auto 16px 20px;
+    background: linear-gradient(135deg, #A100FF 0%, #6600cc 100%);
+    border: none; border-radius: 12px;
+    padding: 11px 16px;
+    color: #fff; cursor: pointer;
+    display: flex; align-items: center; gap: 10px;
+    font-size: 0.82rem; font-weight: 600;
+    box-shadow: 0 4px 18px rgba(161,0,255,0.40);
+    transition: transform 0.15s, box-shadow 0.15s;
+    width: calc(100% - 32px);
+    text-align: left;
+}
+.ai-chat-trigger:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(161,0,255,0.55);
+}
+.ai-chat-trigger .ct-icon { font-size: 1.2rem; flex-shrink: 0; }
+.ai-chat-trigger .ct-label { flex: 1; }
+.ai-chat-trigger .ct-label small {
+    display: block; font-size: 0.62rem; font-weight: 400;
+    color: rgba(255,255,255,0.6); margin-top: 1px;
+}
+.ai-chat-trigger .ct-soon {
+    font-size: 0.58rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.8px; background: rgba(255,255,255,0.18);
+    padding: 2px 6px; border-radius: 4px; flex-shrink: 0;
+}
+
+/* Overlay */
+.ai-chat-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(10,0,30,0.55); backdrop-filter: blur(3px);
+    z-index: 500; align-items: center; justify-content: center;
+}
+.ai-chat-overlay.open { display: flex; }
+
+/* Panel */
+.ai-chat-panel {
+    width: 420px; max-width: calc(100vw - 32px);
+    height: 560px; max-height: calc(100vh - 60px);
+    background: #fff; border-radius: 20px;
+    box-shadow: 0 32px 80px rgba(10,0,30,0.30);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+    animation: chatSlideIn 0.25s cubic-bezier(0.34,1.56,0.64,1);
+}
+@keyframes chatSlideIn {
+    from { opacity: 0; transform: scale(0.92) translateY(24px); }
+    to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* Panel header */
+.ai-chat-header {
+    background: linear-gradient(135deg, #1a0533 0%, #2d0a5a 100%);
+    padding: 18px 20px 14px;
+    display: flex; align-items: center; gap: 12px;
+    flex-shrink: 0;
+}
+.ai-chat-header .ch-avatar {
+    width: 38px; height: 38px; border-radius: 50%;
+    background: linear-gradient(135deg, #A100FF, #6600cc);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.1rem; flex-shrink: 0;
+}
+.ai-chat-header .ch-title { flex: 1; }
+.ai-chat-header .ch-title h3 {
+    font-size: 0.92rem; font-weight: 700; color: #fff; margin: 0;
+}
+.ai-chat-header .ch-title span {
+    font-size: 0.68rem; color: rgba(255,255,255,0.5);
+}
+.ai-chat-close {
+    background: rgba(255,255,255,0.10); border: none;
+    color: rgba(255,255,255,0.7); width: 30px; height: 30px;
+    border-radius: 50%; cursor: pointer; font-size: 1rem;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.15s;
+}
+.ai-chat-close:hover { background: rgba(255,255,255,0.22); color: #fff; }
+
+/* Messages area */
+.ai-chat-messages {
+    flex: 1; overflow-y: auto; padding: 20px 16px 8px;
+    display: flex; flex-direction: column; gap: 14px;
+    background: #f8f6fc;
+}
+.chat-bubble-row {
+    display: flex; align-items: flex-end; gap: 8px;
+}
+.chat-bubble-row.bot { justify-content: flex-start; }
+.chat-bubble-row.user { justify-content: flex-end; }
+.cb-avatar {
+    width: 28px; height: 28px; border-radius: 50%;
+    background: linear-gradient(135deg, #A100FF, #6600cc);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.8rem; flex-shrink: 0;
+}
+.chat-bubble {
+    max-width: 80%; padding: 11px 14px;
+    border-radius: 16px; font-size: 0.83rem; line-height: 1.5;
+}
+.chat-bubble.bot {
+    background: #fff; color: #2d1a4a;
+    border-bottom-left-radius: 4px;
+    box-shadow: 0 2px 8px rgba(26,5,51,0.08);
+}
+.chat-bubble.user {
+    background: linear-gradient(135deg, #A100FF, #6600cc);
+    color: #fff; border-bottom-right-radius: 4px;
+}
+.chat-coming-soon-card {
+    background: linear-gradient(135deg, #f0e6ff 0%, #e8f0ff 100%);
+    border: 1.5px solid rgba(161,0,255,0.20);
+    border-radius: 14px; padding: 16px;
+    font-size: 0.80rem;
+}
+.chat-coming-soon-card .cc-heading {
+    font-weight: 700; color: #A100FF; margin-bottom: 10px;
+    display: flex; align-items: center; gap: 6px; font-size: 0.85rem;
+}
+.chat-coming-soon-card ul {
+    margin: 0; padding-left: 18px; color: #4a2a7a;
+    display: flex; flex-direction: column; gap: 5px;
+}
+.chat-coming-soon-card .cc-footer {
+    margin-top: 12px; padding-top: 10px;
+    border-top: 1px solid rgba(161,0,255,0.15);
+    font-size: 0.73rem; color: #888; font-style: italic;
+}
+
+/* Input bar */
+.ai-chat-input-bar {
+    padding: 12px 16px; background: #fff;
+    border-top: 1px solid #f0eaf8;
+    display: flex; align-items: center; gap: 10px;
+    flex-shrink: 0;
+}
+.ai-chat-input-bar input {
+    flex: 1; border: 1.5px solid #e8e0f0; border-radius: 24px;
+    padding: 10px 16px; font-size: 0.83rem; outline: none;
+    background: #f8f6fc; color: #999; cursor: not-allowed;
+}
+.ai-chat-send-btn {
+    width: 38px; height: 38px; border-radius: 50%; border: none;
+    background: #e0d0f0; color: #aaa;
+    display: flex; align-items: center; justify-content: center;
+    cursor: not-allowed; font-size: 1.1rem; flex-shrink: 0;
+}
 """
 
 # ---------------------------------------------------------------------------
@@ -466,6 +775,14 @@ def _sidebar_html(active_id: str = "") -> str:
         <a href="/" class="nav-home {home_active}">🗼 Control Tower</a>
         {cluster_blocks}
       </div>
+      <button class="ai-chat-trigger" onclick="openAIChat()">
+        <span class="ct-icon">🤖</span>
+        <span class="ct-label">
+          AI Assistant
+          <small>Ask anything about trade</small>
+        </span>
+        <span class="ct-soon">Soon</span>
+      </button>
     </nav>
     """
 
@@ -511,6 +828,80 @@ BASE = """<!DOCTYPE html>
   </div>
 </main>
 {{ scripts | safe }}
+
+<!-- ── AI Assistant Chat Modal ──────────────────────────────────── -->
+<div class="ai-chat-overlay" id="ai-chat-overlay" onclick="closeAIChatOverlay(event)">
+  <div class="ai-chat-panel">
+
+    <div class="ai-chat-header">
+      <div class="ch-avatar">🤖</div>
+      <div class="ch-title">
+        <h3>AI Trade Assistant</h3>
+        <span>Powered by TradeNavigator AI</span>
+      </div>
+      <button class="ai-chat-close" onclick="closeAIChat()" title="Close">&#x2715;</button>
+    </div>
+
+    <div class="ai-chat-messages">
+      <div class="chat-bubble-row bot">
+        <div class="cb-avatar">🤖</div>
+        <div class="chat-bubble bot">
+          Hi there! I&#39;m your <strong>AI Trade Assistant</strong>.<br><br>
+          I&#39;m designed to help you navigate tariff classifications,
+          trade compliance questions, duty optimisation strategies,
+          and real-time policy alerts — all in plain language.
+        </div>
+      </div>
+
+      <div class="chat-coming-soon-card">
+        <div class="cc-heading">🚧 Coming in the next release</div>
+        <ul>
+          <li>Ask any trade compliance or tariff question in plain English</li>
+          <li>Get instant HS code classification guidance</li>
+          <li>Explain duty-optimisation opportunities across your lanes</li>
+          <li>Summarise recent tariff shock alerts and their impact</li>
+          <li>Suggest FTA eligibility based on origin &amp; product type</li>
+        </ul>
+        <div class="cc-footer">
+          This assistant will be fully operational in the upcoming release.
+          Stay tuned — it&#39;s almost here.
+        </div>
+      </div>
+    </div>
+
+    <div class="ai-chat-input-bar">
+      <input type="text" disabled
+             placeholder="Chat will be available in the next release…"
+             title="Coming soon — chat is not yet active">
+      <button class="ai-chat-send-btn" disabled title="Coming soon">&#x2191;</button>
+    </div>
+
+  </div>
+</div>
+
+<script>
+(function() {
+  function openAIChat() {
+    document.getElementById('ai-chat-overlay').classList.add('open');
+  }
+  function closeAIChat() {
+    document.getElementById('ai-chat-overlay').classList.remove('open');
+  }
+  function closeAIChatOverlay(e) {
+    if (e.target === e.currentTarget) closeAIChat();
+  }
+  // Expose to global scope so inline onclick="" handlers can reach them.
+  window.openAIChat = openAIChat;
+  window.closeAIChat = closeAIChat;
+  window.closeAIChatOverlay = closeAIChatOverlay;
+
+  // ESC key closes the chat
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeAIChat();
+  });
+})();
+</script>
+
 </body>
 </html>"""
 
@@ -742,6 +1133,203 @@ def agent_detail(agent_id):
         </div>
         """
         scripts = ""
+
+    elif agent_id == "tariff_shock":
+        # ----------------------------------------------------------------
+        # Tariff Shock & Resilience Agent
+        # SINGLE-SWITCH ROLLBACK (Adjustment 1):
+        #   _tariff_shock_agent is None  iff  tariff_shock.enabled=false in config.yaml
+        #   When None -> inactive placeholder rendered HERE, flag alone controls it.
+        #   No registry-status flip is needed for rollback.
+        # ----------------------------------------------------------------
+        if _tariff_shock_agent is None:
+            body_html = """
+            <div class="coming-soon-box">
+              <div class="cs-icon">⚡</div>
+              <h2>Tariff Shock Agent &mdash; Inactive</h2>
+              <p>Set <code>tariff_shock.enabled: true</code> in
+                 <strong>config.yaml</strong> and restart the app to activate
+                 real-time exposure quantification for this agent.</p>
+            </div>
+            """
+            scripts = ""
+        else:
+            body_html = """
+            <div class="section-card" style="margin-bottom:20px;border-top:3px solid #12B3A3;">
+              <div class="section-card-header" style="color:#12B3A3;">
+                ⚡ Exposure Quantification &mdash; Step 2 (Live)
+              </div>
+              <div style="padding:14px 20px;font-size:0.78rem;color:#666;
+                          border-bottom:1px solid #f0eaf8;">
+                <strong>Data source:</strong> aggregator rate-change events
+                &nbsp;|&nbsp;
+                <strong>Volume:</strong>
+                <span style="color:#F76C6C;font-weight:600;">ILLUSTRATIVE stub values
+                &mdash; not live ERP data</span>
+              </div>
+              <div id="ts-alerts-container" style="padding:12px 20px;">
+                <em style="color:#aaa;font-size:0.82rem;">
+                  Waiting for aggregator rate-change events&hellip;
+                  Alerts appear here when the scheduler detects a material change.
+                </em>
+              </div>
+            </div>
+
+            <div class="section-card">
+              <div class="section-card-header">
+                📊 Per-Lane Exposure Report
+              </div>
+              <div id="ts-report-container" style="padding:12px 20px;">
+                <em style="color:#aaa;font-size:0.82rem;">
+                  No exposure data yet.
+                </em>
+              </div>
+            </div>
+
+            <div class="section-card" style="opacity:0.55;">
+              <div class="section-card-header">
+                🔮 Step 1 &mdash; NLP Signal Ingestion <span style="font-weight:400;color:#aaa;">(stub)</span>
+              </div>
+              <div style="padding:20px;color:#aaa;font-size:0.82rem;">
+                TODO: parse news/policy signals to anticipate rate changes before
+                the scheduler detects them.
+              </div>
+            </div>
+            <div class="section-card" style="opacity:0.55;">
+              <div class="section-card-header">
+                🌏 Step 3 &mdash; Sourcing / China+1 Modelling <span style="font-weight:400;color:#aaa;">(stub)</span>
+              </div>
+              <div style="padding:20px;color:#aaa;font-size:0.82rem;">
+                TODO: propose alternative origin countries for high-exposure lanes.
+              </div>
+            </div>
+            <div class="section-card" style="opacity:0.55;">
+              <div class="section-card-header">
+                📋 Step 4 &mdash; Playbooks / Filings <span style="font-weight:400;color:#aaa;">(stub)</span>
+              </div>
+              <div style="padding:20px;color:#aaa;font-size:0.82rem;">
+                TODO: generate binding rulings, FTA cert renewals, duty-relief petitions.
+              </div>
+            </div>
+            """
+            scripts = """
+            <script>
+            (function() {
+              function renderAlerts(alerts) {
+                var c = document.getElementById('ts-alerts-container');
+                if (!c) return;
+                if (!alerts || alerts.length === 0) {
+                  c.innerHTML = '<em style="color:#aaa;font-size:0.82rem;">No alerts yet — waiting for rate-change events.</em>';
+                  return;
+                }
+                var html = '';
+                alerts.forEach(function(a) {
+                  var dot = 'sev-' + a.severity;
+                  html += '<div class="alert-row">'
+                    + '<div class="sev-dot ' + dot + '"></div>'
+                    + '<div class="alert-msg">' + a.message + '</div>'
+                    + '<div class="alert-ts">' + a.timestamp + '</div>'
+                    + '</div>';
+                });
+                c.innerHTML = html;
+              }
+
+              function renderReport(reports) {
+                var c = document.getElementById('ts-report-container');
+                if (!c) return;
+                var keys = Object.keys(reports || {});
+                if (keys.length === 0) {
+                  c.innerHTML = '<em style="color:#aaa;font-size:0.82rem;">No exposure data yet.</em>';
+                  return;
+                }
+                var html = '<table style="width:100%;font-size:0.78rem;border-collapse:collapse;">';
+                html += '<tr style="background:#f9f6ff;font-weight:700;">'
+                  + '<th style="padding:8px;text-align:left;">Lane</th>'
+                  + '<th style="padding:8px;text-align:right;">Old eff.%</th>'
+                  + '<th style="padding:8px;text-align:right;">New eff.%</th>'
+                  + '<th style="padding:8px;text-align:right;">Delta pp</th>'
+                  + '<th style="padding:8px;text-align:right;">Exposure/yr</th>'
+                  + '<th style="padding:8px;text-align:left;">Note</th>'
+                  + '</tr>';
+                keys.forEach(function(k) {
+                  var r = reports[k];
+                  var dirColor = r.direction === 'increase' ? '#F76C6C'
+                               : r.direction === 'decrease' ? '#12B3A3' : '#888';
+                  var expStr = r.review_flag
+                    ? '<span style="color:#F5A623;">Manual review</span>'
+                    : (r.exposure_amount !== null
+                        ? '<span style="color:' + dirColor + ';font-weight:600;">$'
+                          + (r.exposure_amount / 1000).toFixed(0) + 'K</span>'
+                        : '—');
+                  var delta = r.delta_pct !== null
+                    ? (r.delta_pct > 0 ? '+' : '') + r.delta_pct.toFixed(2)
+                    : '—';
+                  html += '<tr style="border-top:1px solid #f0eaf8;">'
+                    + '<td style="padding:8px;">' + r.hs6 + ' ' + r.origin + '->' + r.destination + '</td>'
+                    + '<td style="padding:8px;text-align:right;">' + (r.old_effective_rate !== null ? r.old_effective_rate.toFixed(2) + '%' : '—') + '</td>'
+                    + '<td style="padding:8px;text-align:right;">' + (r.new_effective_rate !== null ? r.new_effective_rate.toFixed(2) + '%' : '—') + '</td>'
+                    + '<td style="padding:8px;text-align:right;color:' + dirColor + ';">' + delta + '</td>'
+                    + '<td style="padding:8px;text-align:right;">' + expStr + '</td>'
+                    + '<td style="padding:8px;color:#aaa;">' + (r.review_reason || r.applicable_fta || '') + '</td>'
+                    + '</tr>';
+                });
+                html += '</table>';
+                html += '<div style="font-size:0.65rem;color:#F76C6C;margin-top:8px;">'
+                  + '* ILLUSTRATIVE stub volumes — not live ERP data. '
+                  + '<a href="/api/tariff-shock" style="color:#0050b3;">Raw JSON</a></div>';
+                c.innerHTML = html;
+              }
+
+              function loadTariffShock() {
+                fetch('/api/tariff-shock')
+                  .then(function(r) { return r.json(); })
+                  .then(function(data) {
+                    renderAlerts(data.alerts);
+                    renderReport(data.reports);
+                  })
+                  .catch(function(e) { console.error('tariff-shock fetch error:', e); });
+              }
+
+              // Load tariff feed (right pane)
+              function loadTariffFeed() {
+                fetch('/api/tariff-feed')
+                  .then(function(r) { return r.json(); })
+                  .then(function(data) {
+                    var sc = document.getElementById('sources-container');
+                    if (sc && data.sources.length > 0) {
+                      var sh = '<div class="sources-title">Source Monitoring</div>';
+                      data.sources.forEach(function(s) {
+                        sh += '<div class="source-row"><span class="source-icon">' + s.icon + '</span>'
+                          + '<span class="source-name">' + s.name + '</span>'
+                          + '<span class="source-badge">' + s.status + '</span></div>';
+                      });
+                      sc.innerHTML = sh;
+                    }
+                    var fc = document.getElementById('tariff-feed-container');
+                    if (fc && data.feed.length > 0) {
+                      var fh = '<div class="feed-section-label">Recent Feed</div>';
+                      data.feed.forEach(function(ev) {
+                        var sc2 = 'status-' + ev.status;
+                        fh += '<div class="tariff-event"><div class="tariff-event-header">'
+                          + '<div class="tariff-headline">' + ev.headline + '</div>'
+                          + '<span class="tariff-status-badge ' + sc2 + '">' + ev.status + '</span>'
+                          + '</div><div class="tariff-time">' + ev.time_short + '</div>'
+                          + '<div class="tariff-detail">' + ev.detail + '</div>'
+                          + '<div class="tariff-source">via ' + ev.source + '</div></div>';
+                      });
+                      fc.innerHTML = fh;
+                    }
+                  });
+              }
+
+              loadTariffShock();
+              loadTariffFeed();
+              setInterval(loadTariffShock, 10000);
+              setInterval(loadTariffFeed, 10000);
+            })();
+            </script>
+            """
+
     else:
         # ================================================================
         # AGENT LOGIC PLUG-IN POINT

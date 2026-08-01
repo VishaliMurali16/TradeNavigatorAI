@@ -51,7 +51,9 @@ AGENTS = [
         "cluster_color": "#12B3A3",
         "icon": "⚡",
         "tagline": "Model tariff-shock scenarios and recommend sourcing pivots in real time.",
-        "status": "coming_soon",
+        "status": "live",
+        # Content rendered is controlled by tariff_shock.enabled in config.yaml alone.
+        # Flip enabled=false for instant rollback — no registry change needed.
     },
     {
         "id": "trade_control_tower",
