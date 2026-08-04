@@ -1,10 +1,11 @@
 import asyncio
 import concurrent.futures
+import json
 import os
 import threading
 import time
 
-from flask import Flask, render_template_string, redirect, url_for, jsonify
+from flask import Flask, render_template_string, redirect, url_for, jsonify, request
 from dotenv import load_dotenv
 from air import AsyncAIRefinery
 
@@ -19,6 +20,37 @@ app = Flask(__name__)
 # Cache so repeated refreshes never trigger a second AI call
 _ai_cache: dict = {"text": None, "ts": 0.0, "lock": threading.Lock(), "in_flight": False}
 _AI_CACHE_TTL = 60  # seconds
+
+# In-memory action log for the control tower workflow
+_action_log: list[dict] = []
+
+
+def _render_action_log_rows(limit: int | None = None) -> str:
+    entries = list(reversed(_action_log))
+    if limit is not None:
+        entries = entries[:limit]
+
+    if not entries:
+        return """
+        <tr>
+          <td colspan="5" style="padding: 18px; color: #6f6b7d;">No completed actions yet. Mark a task complete in the control tower to populate this page.</td>
+        </tr>
+        """
+
+    rows = ""
+    for item in entries:
+        remarks = (item.get("remarks") or "—").replace("\n", "<br>")
+        rows += f"""
+        <tr>
+          <td>{item['role']}</td>
+          <td>{item['taskText']}</td>
+          <td><span class="badge-pill">{item['status']}</span></td>
+          <td>{item['completedOn']}</td>
+          <td>{remarks}</td>
+        </tr>
+        """
+    return rows
+
 
 # ---------------------------------------------------------------------------
 # AI Integration
@@ -124,25 +156,50 @@ def api_tariff_feed():
     return jsonify({"sources": sources, "feed": feed})
 
 
+@app.route("/api/action-log", methods=["GET", "POST"])
+def api_action_log():
+    if request.method == "POST":
+        payload = request.get_json(silent=True) or {}
+        entry = {
+            "id": len(_action_log) + 1,
+            "role": payload.get("role", "Supervisor"),
+            "taskId": payload.get("taskId", "unknown"),
+            "taskText": payload.get("taskText", "Unnamed task"),
+            "completedOn": payload.get("completedOn", "—"),
+            "remarks": payload.get("remarks", ""),
+            "status": "Completed",
+        }
+        _action_log.append(entry)
+        return jsonify({"ok": True, "entry": entry})
+
+    return jsonify({"entries": list(reversed(_action_log))})
+
+
 # ---------------------------------------------------------------------------
 # Shared CSS
 # ---------------------------------------------------------------------------
 
 _CSS = """
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+    height: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, sans-serif;
-    background: #f4f4f8;
+    background: linear-gradient(135deg, #f7f5ff 0%, #f2f6fb 100%);
     color: #1a0533;
     display: flex;
     min-height: 100vh;
+    min-width: 100%;
 }
 
 /* ── Sidebar ─────────────────────────────────────────────────── */
 .sidebar {
     width: 260px;
     min-height: 100vh;
-    background: #1a0533;
+    background: linear-gradient(180deg, #1a0533 0%, #22074b 100%);
     color: #fff;
     display: flex;
     flex-direction: column;
@@ -150,6 +207,7 @@ body {
     top: 0; left: 0; bottom: 0;
     overflow-y: auto;
     z-index: 100;
+    box-shadow: 10px 0 24px rgba(26,5,51,0.12);
 }
 .sidebar-brand {
     padding: 24px 20px 16px;
@@ -214,9 +272,109 @@ body {
 .nav-agent.coming-soon { opacity: 0.5; }
 
 /* ── Main content ────────────────────────────────────────────── */
-.main { margin-left: 260px; flex: 1; display: flex; }
-.main-content { flex: 1; padding: 32px 36px; overflow-y: auto; }
-.main-right-pane { width: 340px; background: #fff; border-left: 1px solid #e8e0f0; overflow-y: auto; display: flex; flex-direction: column; }
+.main { margin-left: 260px; flex: 1; display: flex; flex-wrap: nowrap; height: 100vh; min-width: 720px; overflow: hidden; }
+.page-shell { display: grid; gap: 16px; }
+.page-card {
+    background: rgba(255,255,255,0.95);
+    border: 1px solid rgba(161,0,255,0.1);
+    border-radius: 16px;
+    padding: 20px;
+    box-shadow: 0 10px 24px rgba(26,5,51,0.06);
+}
+.page-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #1a0533;
+    margin-bottom: 6px;
+}
+.page-subtitle {
+    font-size: 0.84rem;
+    color: #6f6b7d;
+    margin-bottom: 12px;
+}
+.page-grid {
+    display: grid;
+    gap: 16px;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+.info-card {
+    background: linear-gradient(135deg, #faf7ff 0%, #f7fbff 100%);
+    border: 1px solid rgba(161,0,255,0.08);
+    border-radius: 12px;
+    padding: 16px;
+}
+.info-card .label {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #A100FF;
+    font-weight: 700;
+}
+.info-card .value {
+    font-size: 1rem;
+    font-weight: 700;
+    color: #1a0533;
+    margin-top: 6px;
+}
+.log-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+}
+.log-table th, .log-table td {
+    padding: 10px 12px;
+    border-bottom: 1px solid #efe8f7;
+    text-align: left;
+    vertical-align: top;
+}
+.log-table thead th {
+    background: #f6f1ff;
+    color: #5e5871;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.9px;
+}
+.log-table tbody tr:hover {
+    background: #fcfaff;
+}
+.badge-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: #e8fff9;
+    color: #12B3A3;
+    font-size: 0.72rem;
+    font-weight: 700;
+}
+.main-content {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 28px 32px 32px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    scrollbar-gutter: stable;
+}
+.main-right-pane {
+    flex: 0 0 360px;
+    width: 360px;
+    max-width: 360px;
+    min-width: 360px;
+    background: rgba(255,255,255,0.88);
+    backdrop-filter: blur(10px);
+    border-left: 1px solid rgba(26,5,51,0.08);
+    overflow-y: auto;
+    overflow-x: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow: -8px 0 24px rgba(26,5,51,0.04);
+    scrollbar-gutter: stable;
+    flex-shrink: 0;
+}
 
 /* ── Right tariff pane ───────────────────────────────────────── */
 .tariff-pane-header {
@@ -295,28 +453,72 @@ body {
 .page-header {
     background: linear-gradient(135deg, #1a0533 0%, #2d0a5a 100%);
     color: #fff;
-    border-radius: 12px;
-    padding: 28px 32px;
-    margin-bottom: 28px;
-    display: flex; align-items: center; gap: 20px;
+    border-radius: 16px;
+    padding: 24px 28px;
+    display: flex; align-items: center; gap: 18px;
+    box-shadow: 0 14px 30px rgba(26,5,51,0.12);
+}
+.role-switcher {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(255,255,255,0.12);
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 999px;
+    padding: 7px 10px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #fff;
+}
+.role-switcher select {
+    background: transparent;
+    color: #fff;
+    border: 0;
+    outline: none;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+.role-switcher select option {
+    color: #1a0533;
 }
 .page-header .header-icon { font-size: 2.4rem; }
-.page-header h1 { font-size: 1.6rem; font-weight: 700; }
-.page-header .header-sub { font-size: 0.85rem; color: rgba(255,255,255,0.6); margin-top: 4px; }
+.page-header h1 { font-size: 1.5rem; font-weight: 700; }
+.page-header .header-sub { font-size: 0.85rem; color: rgba(255,255,255,0.65); margin-top: 4px; }
+.header-pills { display:flex; gap:8px; flex-wrap:wrap; margin-top: 8px; }
+.pill {
+    display:inline-flex; align-items:center; gap:6px;
+    padding: 6px 10px; border-radius: 999px;
+    font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.8px; background: rgba(255,255,255,0.13); color: #fff;
+}
+.pill.live { background: rgba(18,179,163,0.18); color: #b8fff3; }
 .accent-bar { height: 4px; border-radius: 2px; margin-bottom: 2px; }
+
+.overview-band {
+    display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px;
+}
+.overview-card {
+    background: rgba(255,255,255,0.9);
+    border: 1px solid rgba(161,0,255,0.12);
+    border-radius: 14px;
+    padding: 16px 18px;
+    box-shadow: 0 8px 20px rgba(26,5,51,0.06);
+}
+.overview-label { font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; color: #A100FF; }
+.overview-title { font-size: 0.95rem; font-weight: 600; color: #2d1a4a; margin-top: 6px; line-height: 1.4; }
 
 /* ── KPI strip ───────────────────────────────────────────────── */
 .kpi-strip {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
     gap: 16px;
-    margin-bottom: 28px;
 }
 .kpi-card {
     background: #fff;
-    border-radius: 10px;
-    padding: 20px;
-    box-shadow: 0 2px 8px rgba(26,5,51,0.07);
+    border-radius: 12px;
+    padding: 18px 20px;
+    box-shadow: 0 8px 22px rgba(26,5,51,0.06);
     border-top: 3px solid #A100FF;
 }
 .kpi-card.risk    { border-top-color: #F76C6C; }
@@ -344,10 +546,9 @@ body {
 /* ── Section card ────────────────────────────────────────────── */
 .section-card {
     background: #fff;
-    border-radius: 10px;
-    box-shadow: 0 2px 8px rgba(26,5,51,0.07);
+    border-radius: 14px;
+    box-shadow: 0 8px 22px rgba(26,5,51,0.06);
     overflow: hidden;
-    margin-bottom: 28px;
 }
 .section-card-header {
     padding: 14px 20px;
@@ -357,6 +558,7 @@ body {
     letter-spacing: 1px;
     border-bottom: 1px solid #f0eaf8;
     display: flex; align-items: center; gap: 8px;
+    background: linear-gradient(90deg, rgba(161,0,255,0.05) 0%, rgba(255,255,255,0) 100%);
 }
 
 /* ── Alerts feed ─────────────────────────────────────────────── */
@@ -375,17 +577,17 @@ body {
 .alert-ts  { font-size: 0.72rem; color: #aaa; white-space: nowrap; }
 
 /* ── Agent grid ──────────────────────────────────────────────── */
-.cluster-section { margin-bottom: 28px; }
+.cluster-section { margin-bottom: 8px; }
 .cluster-section h3 {
     font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
     letter-spacing: 1.5px; margin-bottom: 12px; padding-left: 4px;
 }
 .agent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; }
 .agent-tile {
-    background: #fff;
-    border-radius: 10px;
-    padding: 20px 16px;
-    box-shadow: 0 2px 8px rgba(26,5,51,0.07);
+    background: linear-gradient(180deg, #ffffff 0%, #faf8ff 100%);
+    border-radius: 12px;
+    padding: 18px 16px;
+    box-shadow: 0 8px 20px rgba(26,5,51,0.06);
     text-decoration: none;
     color: #1a0533;
     display: flex; flex-direction: column; gap: 8px;
@@ -393,7 +595,7 @@ body {
     transition: transform 0.15s, box-shadow 0.15s;
     position: relative;
 }
-.agent-tile:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(26,5,51,0.12); }
+.agent-tile:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(26,5,51,0.12); }
 .agent-tile.coming-soon { opacity: 0.55; pointer-events: none; }
 .agent-tile .tile-icon { font-size: 1.6rem; }
 .agent-tile .tile-name { font-size: 0.85rem; font-weight: 700; line-height: 1.3; }
@@ -419,6 +621,121 @@ body {
 .coming-soon-box h2 { font-size: 1.3rem; font-weight: 700; margin-bottom: 8px; }
 .coming-soon-box p  { font-size: 0.88rem; color: #888; max-width: 400px; margin: 0 auto; }
 
+/* ── Role to-do ─────────────────────────────────────────────── */
+.role-todo {
+    background: #fff;
+    border-radius: 14px;
+    box-shadow: 0 8px 22px rgba(26,5,51,0.06);
+    padding: 18px 20px;
+    border: 1px solid rgba(161,0,255,0.12);
+}
+.role-todo-title {
+    font-size: 0.8rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #A100FF;
+    margin-bottom: 10px;
+}
+.role-todo-list {
+    display: grid;
+    gap: 8px;
+}
+.role-todo-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 12px;
+    background: #f8f6ff;
+    border-radius: 10px;
+    font-size: 0.84rem;
+    color: #2d1a4a;
+}
+.role-todo-item .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #12B3A3;
+    margin-top: 6px;
+    flex-shrink: 0;
+}
+.role-todo-item.completed {
+    background: #f2fbf8;
+    border: 1px solid rgba(18,179,163,0.15);
+}
+.role-todo-item.completed .dot {
+    background: #12B3A3;
+}
+.task-text { flex: 1; }
+.task-meta { margin-top: 4px; font-size: 0.72rem; color: #6f6b7d; }
+.todo-complete-btn {
+    background: #1a0533;
+    color: #fff;
+    border: 0;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    padding: 6px 10px;
+    cursor: pointer;
+}
+.todo-complete-btn:hover { background: #2d0a5a; }
+.todo-state-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    color: #12B3A3;
+    margin-left: 8px;
+}
+.todo-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(26,5,51,0.45);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 200;
+    padding: 20px;
+}
+.todo-modal.active { display: flex; }
+.todo-modal-card {
+    width: min(480px, 100%);
+    background: #fff;
+    border-radius: 14px;
+    padding: 20px;
+    box-shadow: 0 16px 40px rgba(26,5,51,0.18);
+}
+.todo-modal-title {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: #1a0533;
+    margin-bottom: 12px;
+}
+.todo-modal label { display: block; font-size: 0.8rem; font-weight: 600; color: #5e5871; margin-bottom: 6px; }
+.todo-modal textarea, .todo-modal input {
+    width: 100%;
+    border: 1px solid #e5dff0;
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    font-size: 0.84rem;
+    color: #1a0533;
+}
+.todo-modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.todo-modal-actions button {
+    border: 0;
+    border-radius: 999px;
+    padding: 8px 12px;
+    cursor: pointer;
+    font-weight: 700;
+    font-size: 0.78rem;
+}
+.todo-modal-actions .save-btn { background: #1a0533; color: #fff; }
+.todo-modal-actions .cancel-btn { background: #f2eef9; color: #5e5871; }
+
 /* ── Misc ─────────────────────────────────────────────────────── */
 .back-link {
     display: inline-flex; align-items: center; gap: 6px;
@@ -427,9 +744,29 @@ body {
 }
 .back-link:hover { text-decoration: underline; }
 .footer {
-    margin-top: 40px; padding-top: 16px;
+    margin-top: 20px; padding-top: 16px;
     border-top: 1px solid #e8e0f0;
-    font-size: 0.72rem; color: #bbb; text-align: right;
+    font-size: 0.72rem; color: #b2a8c8; text-align: right;
+}
+
+@media (max-width: 520px) {
+    .main { flex-direction: column; }
+    .main-right-pane {
+        flex: 0 0 auto;
+        width: 100%;
+        max-width: none;
+        min-width: 0;
+        border-left: 0;
+        border-top: 1px solid rgba(26,5,51,0.08);
+        max-height: 420px;
+    }
+}
+
+@media (max-width: 760px) {
+    .sidebar { position: static; width: 100%; min-height: auto; max-height: none; }
+    .main { margin-left: 0; flex-direction: column; }
+    .main-content { padding: 20px; }
+    .page-header { flex-direction: column; align-items: flex-start; }
 }
 """
 
@@ -455,6 +792,16 @@ def _sidebar_html(active_id: str = "") -> str:
             f'{cluster["name"]}</div>{rows}'
         )
 
+    workspace_links = [
+        ("profile", "👤 Profile", "/profile"),
+        ("settings", "⚙️ Settings", "/settings"),
+        ("action-logs", "🗂️ Action Logs", "/action-logs"),
+    ]
+    workspace_rows = "".join(
+        f'<a href="{url}" class="nav-agent {"active" if active_id == item_id else ""}">{label}</a>'
+        for item_id, label, url in workspace_links
+    )
+
     home_active = "active" if not active_id else ""
     return f"""
     <nav class="sidebar">
@@ -464,6 +811,8 @@ def _sidebar_html(active_id: str = "") -> str:
       </div>
       <div class="sidebar-nav">
         <a href="/" class="nav-home {home_active}">🗼 Control Tower</a>
+        <div class="cluster-label" style="color:#A100FF">Workspace</div>
+        {workspace_rows}
         {cluster_blocks}
       </div>
     </nav>
@@ -558,17 +907,7 @@ def control_tower():
     </div>
     """
 
-    ai_html = """
-    <div class="ai-summary">
-      <div class="ai-icon">🤖</div>
-      <div>
-        <div class="ai-label">AI Trade Posture Summary</div>
-        <div class="ai-text" id="ai-posture-text">
-          <span class="ai-loading">Generating trade posture analysis…</span>
-        </div>
-      </div>
-    </div>
-    """
+    ai_html = ""
 
     alert_rows = ""
     for al in alerts:
@@ -580,68 +919,121 @@ def control_tower():
           <div class="alert-ts">{al['timestamp']}</div>
         </div>"""
 
-    alerts_html = f"""
-    <div class="section-card">
-      <div class="section-card-header">🔔 Live Alert Feed</div>
-      {alert_rows}
-    </div>
-    """
+    alerts_html = ""
 
     cluster_tiles = ""
-    for cluster in CLUSTERS:
-        agents = [a for a in AGENTS if a["cluster"] == cluster["name"]]
-        tiles = ""
-        for a in agents:
-            is_soon = a["status"] == "coming_soon"
-            cs_cls  = "coming-soon" if is_soon else ""
-            st_cls  = "status-soon" if is_soon else "status-live"
-            st_lbl  = "Soon" if is_soon else "Live"
-            href    = f'/agent/{a["id"]}'
-            tiles += f"""
-            <a href="{href}" class="agent-tile {cs_cls}" style="border-top-color:{cluster['color']}">
-              <span class="tile-status {st_cls}">{st_lbl}</span>
-              <div class="tile-icon">{a['icon']}</div>
-              <div class="tile-name">{a['display_name']}</div>
-              <div class="tile-tag">{a['tagline'][:55]}…</div>
-            </a>"""
 
-        cluster_tiles += f"""
-        <div class="cluster-section">
-          <h3 style="color:{cluster['color']}">{cluster['name']}</h3>
-          <div class="agent-grid">{tiles}</div>
-        </div>"""
+    role_todos = {
+        "Supervisor": [
+            {"id": "sup-1", "text": "Review cross-functional escalations and confirm owners."},
+            {"id": "sup-2", "text": "Approve this week’s trade-risk mitigation priorities."},
+            {"id": "sup-3", "text": "Check status of delayed customs and tariff actions."},
+        ],
+        "Analyst": [
+            {"id": "analyst-1", "text": "Validate the latest tariff and FTA updates."},
+            {"id": "analyst-2", "text": "Prepare the daily trade posture summary for review."},
+            {"id": "analyst-3", "text": "Flag anomalies in shipment and duty data."},
+        ],
+        "Operations": [
+            {"id": "ops-1", "text": "Coordinate urgent compliance follow-up tasks."},
+            {"id": "ops-2", "text": "Confirm shipment exceptions with regional teams."},
+            {"id": "ops-3", "text": "Update the response plan for active tariff events."},
+        ],
+    }
+    role_todos_json = json.dumps(role_todos)
+
+    selected_role = "Supervisor"
+    log_rows = _render_action_log_rows(5)
+    todo_items = "".join(
+        f'<div class="role-todo-item" data-role="{selected_role}" data-task-id="{item["id"]}">'
+        f'<span class="dot"></span>'
+        f'<div class="task-text">{item["text"]}</div>'
+        f'<button class="todo-complete-btn" type="button">Complete</button>'
+        f'</div>'
+        for item in role_todos[selected_role]
+    )
 
     content = f"""
-    <div class="page-header">
+    <div class="page-shell">
+      <div class="page-card">
+        <div class="page-title">Operations control center</div>
+        <div class="page-subtitle">Track your most recent actions and manage the daily workflow from one place.</div>
+        <div class="page-grid">
+          <div class="info-card">
+            <div class="label">Active Persona</div>
+            <div class="value">{selected_role}</div>
+          </div>
+          <div class="info-card">
+            <div class="label">Pending Tasks</div>
+            <div class="value">{len(role_todos[selected_role])}</div>
+          </div>
+          <div class="info-card">
+            <div class="label">Recent Log Entries</div>
+            <div class="value">{len(_action_log)}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="page-header">
       <div class="header-icon">🗼</div>
-      <div>
+      <div style="flex:1;">
         <div class="accent-bar" style="background:#A100FF; width:60px;"></div>
-        <h1>Trade Control Tower</h1>
-        <div class="header-sub">Consolidated global trade intelligence — all agents, one view</div>
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap;">
+          <div>
+            <h1>Trade Control Tower</h1>
+            <div class="header-sub">Consolidated global trade intelligence — all agents, one view</div>
+          </div>
+          <div class="role-switcher">
+            <span>View as</span>
+            <select>
+              <option>Supervisor</option>
+              <option>Analyst</option>
+              <option>Operations</option>
+            </select>
+          </div>
+        </div>
       </div>
     </div>
     {kpi_html}
-    {ai_html}
-    {alerts_html}
-    {cluster_tiles}
+    <div class="role-todo">
+      <div class="role-todo-title" id="role-todo-title">{selected_role} to-do list</div>
+      <div class="role-todo-list" id="role-todo-list">{todo_items}</div>
+    </div>
+    <div class="page-card">
+      <div class="page-title">Latest action log</div>
+      <div class="page-subtitle">Completed actions are added to the operations log automatically.</div>
+      <table class="log-table">
+        <thead>
+          <tr>
+            <th>Role</th>
+            <th>Task</th>
+            <th>Status</th>
+            <th>Completed on</th>
+            <th>Remarks</th>
+          </tr>
+        </thead>
+        <tbody>{log_rows}</tbody>
+      </table>
+    </div>
+    <div class="todo-modal" id="todo-modal" aria-hidden="true">
+      <div class="todo-modal-card">
+        <div class="todo-modal-title">Mark task complete</div>
+        <label for="todo-date">Completion date</label>
+        <input id="todo-date" type="text" readonly>
+        <label for="todo-remarks">Remarks</label>
+        <textarea id="todo-remarks" rows="4" placeholder="Add remarks for the handoff or follow-up"></textarea>
+        <div class="todo-modal-actions">
+          <button class="cancel-btn" type="button" id="todo-cancel">Cancel</button>
+          <button class="save-btn" type="button" id="todo-save">Save</button>
+        </div>
+      </div>
+    </div>
     """
 
     # Fetch AI summary after page renders so the page is never blocked
     scripts = """
     <script>
     (function() {
-      // Fetch posture summary
-      fetch('/api/posture-summary')
-        .then(r => r.json())
-        .then(data => {
-          var el = document.getElementById('ai-posture-text');
-          if (el) el.innerHTML = data.summary.replace(/\\n/g, '<br>');
-        })
-        .catch(function() {
-          var el = document.getElementById('ai-posture-text');
-          if (el) el.innerHTML = 'AI summary unavailable — check API connectivity.';
-        });
-
       // Fetch tariff feed on page load
       function loadTariffFeed() {
         fetch('/api/tariff-feed')
@@ -692,7 +1084,134 @@ def control_tower():
       setInterval(loadTariffFeed, 10000);
     })();
     </script>
+    <script>
+    (function() {
+      const roleTodosData = __ROLE_TODOS_JSON__;
+      const storageKey = 'trade-navigator-role-todos';
+      const roleSelect = document.querySelector('.role-switcher select');
+      const todoTitle = document.getElementById('role-todo-title');
+      const todoList = document.getElementById('role-todo-list');
+      const modal = document.getElementById('todo-modal');
+      const dateInput = document.getElementById('todo-date');
+      const remarksInput = document.getElementById('todo-remarks');
+      const cancelBtn = document.getElementById('todo-cancel');
+      const saveBtn = document.getElementById('todo-save');
+      let activeTask = null;
+
+      function formatToday() {
+        const now = new Date();
+        return now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      }
+
+      function getStoredTodos() {
+        try {
+          return JSON.parse(localStorage.getItem(storageKey)) || {};
+        } catch (e) {
+          return {};
+        }
+      }
+
+      function saveStoredTodos(state) {
+        localStorage.setItem(storageKey, JSON.stringify(state));
+      }
+
+      function getRoleState(role) {
+        const stored = getStoredTodos();
+        if (stored[role]) return stored[role];
+        return roleTodosData[role].map(task => ({ ...task, completed: false, completedOn: '', remarks: '' }));
+      }
+
+      function persistRoleState(role, tasks) {
+        const stored = getStoredTodos();
+        stored[role] = tasks;
+        saveStoredTodos(stored);
+      }
+
+      function renderRoleTasks(role) {
+        const tasks = getRoleState(role);
+        todoTitle.textContent = role + ' to-do list';
+        todoList.innerHTML = tasks.map(task => {
+          const completedClass = task.completed ? ' completed' : '';
+          const meta = task.completed ? `<div class="task-meta">Completed ${task.completedOn}${task.remarks ? ' • ' + task.remarks : ''}</div>` : '';
+          return `
+            <div class="role-todo-item${completedClass}" data-role="${role}" data-task-id="${task.id}">
+              <span class="dot"></span>
+              <div class="task-text">
+                ${task.text}
+                ${meta}
+              </div>
+              ${task.completed ? '<span class="todo-state-badge">✓ Done</span>' : '<button class="todo-complete-btn" type="button">Complete</button>'}
+            </div>`;
+        }).join('');
+        bindTaskButtons();
+      }
+
+      function bindTaskButtons() {
+        todoList.querySelectorAll('.todo-complete-btn').forEach(btn => {
+          btn.addEventListener('click', function() {
+            const item = btn.closest('.role-todo-item');
+            if (!item) return;
+            activeTask = {
+              role: item.dataset.role,
+              taskId: item.dataset.taskId
+            };
+            dateInput.value = formatToday();
+            remarksInput.value = '';
+            modal.classList.add('active');
+            modal.setAttribute('aria-hidden', 'false');
+            remarksInput.focus();
+          });
+        });
+      }
+
+      function closeModal() {
+        modal.classList.remove('active');
+        modal.setAttribute('aria-hidden', 'true');
+        activeTask = null;
+      }
+
+      if (roleSelect) {
+        roleSelect.addEventListener('change', function() {
+          renderRoleTasks(this.value);
+        });
+      }
+
+      cancelBtn.addEventListener('click', closeModal);
+      modal.addEventListener('click', function(e) {
+        if (e.target === modal) closeModal();
+      });
+
+      saveBtn.addEventListener('click', function() {
+        if (!activeTask) return;
+        const tasks = getRoleState(activeTask.role);
+        const task = tasks.find(item => item.id === activeTask.taskId);
+        if (task) {
+          task.completed = true;
+          task.completedOn = dateInput.value || formatToday();
+          task.remarks = remarksInput.value.trim();
+          persistRoleState(activeTask.role, tasks);
+          renderRoleTasks(activeTask.role);
+          fetch('/api/action-log', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              role: activeTask.role,
+              taskId: task.id,
+              taskText: task.text,
+              completedOn: task.completedOn,
+              remarks: task.remarks
+            })
+          }).catch(function(err) { console.error('Log save failed', err); });
+        }
+        closeModal();
+      });
+
+      renderRoleTasks('Supervisor');
+    })();
+    </script>
     """
+
+    scripts = scripts.replace("__ROLE_TODOS_JSON__", role_todos_json)
 
     return render_template_string(
         BASE,
@@ -701,6 +1220,99 @@ def control_tower():
         sidebar=_sidebar_html(""),
         content=content,
         scripts=scripts,
+    )
+
+
+@app.route("/profile")
+def profile_page():
+    content = f"""
+    <div class="page-shell">
+      <div class="page-card">
+        <div class="page-title">Profile overview</div>
+        <div class="page-subtitle">Current workspace and engagement context for the trade control tower.</div>
+        <div class="page-grid">
+          <div class="info-card"><div class="label">User</div><div class="value">Global Trade Operations</div></div>
+          <div class="info-card"><div class="label">Persona</div><div class="value">Supervisor</div></div>
+          <div class="info-card"><div class="label">Primary focus</div><div class="value">Escalations, risk mitigation, and decision support</div></div>
+        </div>
+      </div>
+      <div class="page-card">
+        <div class="page-title">Operational readiness</div>
+        <div class="page-subtitle">A snapshot of the current coverage and handoff readiness.</div>
+        <div class="page-grid">
+          <div class="info-card"><div class="label">Live agents</div><div class="value">8 active workflows</div></div>
+          <div class="info-card"><div class="label">Escalation queue</div><div class="value">13 high-priority issues</div></div>
+          <div class="info-card"><div class="label">Last sync</div><div class="value">4 mins ago</div></div>
+        </div>
+      </div>
+    </div>
+    """
+    return render_template_string(
+        BASE,
+        title="Profile",
+        css=_CSS,
+        sidebar=_sidebar_html("profile"),
+        content=content,
+        scripts="",
+    )
+
+
+@app.route("/settings")
+def settings_page():
+    content = f"""
+    <div class="page-shell">
+      <div class="page-card">
+        <div class="page-title">Settings</div>
+        <div class="page-subtitle">Tune how the control tower surfaces advice, tasks, and alerts.</div>
+        <div class="page-grid">
+          <div class="info-card"><div class="label">Alert cadence</div><div class="value">Every 10 min</div></div>
+          <div class="info-card"><div class="label">Auto-escalation</div><div class="value">Enabled</div></div>
+          <div class="info-card"><div class="label">Notifications</div><div class="value">Slack + email</div></div>
+        </div>
+      </div>
+    </div>
+    """
+    return render_template_string(
+        BASE,
+        title="Settings",
+        css=_CSS,
+        sidebar=_sidebar_html("settings"),
+        content=content,
+        scripts="",
+    )
+
+
+@app.route("/action-logs")
+def action_logs_page():
+    rows = _render_action_log_rows()
+
+    content = f"""
+    <div class="page-shell">
+      <div class="page-card">
+        <div class="page-title">Action log</div>
+        <div class="page-subtitle">A full, tabular audit trail of completed tasks and handoff notes.</div>
+        <table class="log-table">
+          <thead>
+            <tr>
+              <th>Role</th>
+              <th>Task</th>
+              <th>Status</th>
+              <th>Completed on</th>
+              <th>Remarks</th>
+            </tr>
+          </thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </div>
+    </div>
+    """
+    return render_template_string(
+        BASE,
+        title="Action Logs",
+        css=_CSS,
+        sidebar=_sidebar_html("action-logs"),
+        content=content,
+        scripts="",
     )
 
 
