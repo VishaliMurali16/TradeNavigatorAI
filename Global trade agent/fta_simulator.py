@@ -1,21 +1,58 @@
 """
 FTA & Preferential Trade Agent — synthetic data simulator.
 All values are fixed (deterministic) for reproducible UI rendering.
+
+Shared time basis
+-----------------
+PERIOD_START / PERIOD_END define the trailing-12-month window used by every
+aggregate figure (lane eligible/claimed values, unclaimed savings, KPIs).
+Shipment entry dates all fall within this window.
+The CoO Supplier Tracker is a live worklist of *current* outstanding requests
+with future deadlines — it is NOT scoped to the historical period.
 """
+
+# ── Shared time basis ────────────────────────────────────────────────────────
+PERIOD_START = "2025-08-05"   # first day of the trailing-12-month window
+PERIOD_END   = "2026-08-05"   # last day  (= today, illustrative)
+PERIOD_LABEL = "T-12: Aug 2025 – Aug 2026"
+
+# Customs retroactive-claim window: 12 months from entry date (same as the period)
+RETRO_WINDOW_MONTHS = 12
 
 
 def get_fta_kpis() -> dict:
-    """Return top-level KPIs for the FTA utilization dashboard.
+    """All KPIs derived from the same underlying data as the tables.
 
-    unclaimed_opportunity_m is summed from the lane-level formula so it always
-    matches the Utilization Gap table.
+    Time basis: all $ figures cover PERIOD_START – PERIOD_END (PERIOD_LABEL).
+
+    Utilization Rate    = sum(claimed_value_m) / sum(eligible_value_m) — lanes, same period
+    Unclaimed Oppty     = sum(unclaimed_savings_k)                      — lanes, same period
+    Retroactive Claims  = sum(lane.retro_k) where retro_eligible_pct > 0
+                          retro_k = unclaimed_savings_k × retro_eligible_pct / 100
+                          retro_eligible_pct = share of that lane's unclaimed entries
+                          whose entry dates fall within the 12-month retro-claim window
+                          (RETRO_WINDOW_MONTHS from PERIOD_END), i.e. the full period.
+                          Retro Claims is always a strict subset of Unclaimed Opportunity.
+    CoOs Outstanding    = count of live requests with status ∈ {pending, overdue, received}
+                          This is a current worklist — NOT scoped to the historical period.
     """
-    total_k = sum(l["unclaimed_savings_k"] for l in get_fta_lanes())
+    lanes = get_fta_lanes()
+    coos  = get_coo_requests()
+
+    total_eligible_m   = sum(l["eligible_value_m"]   for l in lanes)
+    total_claimed_m    = sum(l["claimed_value_m"]     for l in lanes)
+    total_unclaimed_k  = sum(l["unclaimed_savings_k"] for l in lanes)
+    total_retro_k      = round(sum(l["retro_k"]       for l in lanes), 1)
+    coo_outstanding    = sum(1 for c in coos if c["status"] in ("pending", "overdue", "received"))
+
     return {
-        "utilization_pct": 61,
-        "unclaimed_opportunity_m": round(total_k / 1000, 1),
-        "retroactive_claims_k": 312,
-        "coo_pending": 7,
+        "utilization_pct":         round(total_claimed_m / total_eligible_m * 100, 1),
+        "unclaimed_opportunity_m":  round(total_unclaimed_k / 1000, 1),
+        "retroactive_claims_k":    total_retro_k,
+        "coo_outstanding":         coo_outstanding,
+        # Time-basis labels for display
+        "period_label":            PERIOD_LABEL,
+        "retro_window_label":      f"{RETRO_WINDOW_MONTHS}-month retro window",
     }
 
 
@@ -160,11 +197,32 @@ def get_fta_lanes() -> list:
     ]
     # Derive unclaimed savings from first principles; sort largest gap first.
     # Formula: (eligible - claimed) × (MFN rate − preferential rate)
+    #
+    # retro_eligible_pct: share of a lane's unclaimed savings that falls within
+    # the 12-month retroactive-claim window (0 = lane too new / no prior entries
+    # in window; higher = more historical unclaimed entries available to amend).
+    _retro_pct = {
+        "LN-001": 15,   # USMCA MX→USA  — active lane, moderate retro pool
+        "LN-002": 18,   # EVFTA VN→EU   — large volume, 18 months of entries
+        "LN-003": 25,   # RCEP  VN→JP   — RCEP newer, 25% of gap in window
+        "LN-004": 30,   # KORUS KR→USA  — KORUS mature, Q4–Q1 entries claimable
+        "LN-005": 20,   # EU-Korea KR→DE — some retro entries available
+        "LN-006": 15,   # USMCA CA→USA  — small unclaimed, some retro eligible
+        "LN-007": 30,   # RCEP  ID→JP   — significant retro window
+        "LN-008": 25,   # US-AUS        — some prior-year entries unclaimed
+        "LN-009":  0,   # CPTPP MY→JP   — claims already filed retroactively
+        "LN-010":  0,   # CPTPP PE→CA   — lane too recent for retro window
+        "LN-011":  0,   # CAFTA-DR GT→USA — entries exceed retro period
+    }
     for lane in lanes:
         lane["unclaimed_savings_k"] = round(
             (lane["eligible_value_m"] - lane["claimed_value_m"]) * 1000
             * (lane["mfn_rate_pct"] - lane["preferential_rate_pct"]) / 100,
             1,
+        )
+        lane["retro_eligible_pct"] = _retro_pct.get(lane["lane_id"], 0)
+        lane["retro_k"] = round(
+            lane["unclaimed_savings_k"] * lane["retro_eligible_pct"] / 100, 1
         )
     lanes.sort(key=lambda x: x["unclaimed_savings_k"], reverse=True)
     return lanes
@@ -173,6 +231,10 @@ def get_fta_lanes() -> list:
 def get_fta_shipments() -> list:
     """
     Return 18 shipments covering all three eligibility and RoO statuses.
+
+    All entry_date values fall within PERIOD_START – PERIOD_END (PERIOD_LABEL).
+    Eligible-unclaimed entries are dated in the last 3–4 months of the period
+    (most actionable); claimed and not-eligible entries are spread across the year.
 
     ro_status is DERIVED from rvc_pct vs rvc_threshold_pct — never hardcoded:
         qualified  = rvc_pct >= rvc_threshold_pct
@@ -184,9 +246,10 @@ def get_fta_shipments() -> list:
         KORUS 45%, EU-Korea 55%, CPTPP 40%, CAFTA-DR 35%, N/A 40% (notional).
     """
     shipments = [
-        # ── eligible-unclaimed ──────────────────────────────────────────
+        # ── eligible-unclaimed ─────────────────────────────────────────────
         {
             "shipment_id": "SHP-001",
+            "entry_date": "2026-06-12",
             "product": "Automotive Parts",
             "hs_code": "8708.29",
             "origin": "Mexico",
@@ -200,6 +263,7 @@ def get_fta_shipments() -> list:
         },
         {
             "shipment_id": "SHP-002",
+            "entry_date": "2026-07-03",
             "product": "Electronic Components",
             "hs_code": "8542.31",
             "origin": "Vietnam",
@@ -213,6 +277,7 @@ def get_fta_shipments() -> list:
         },
         {
             "shipment_id": "SHP-003",
+            "entry_date": "2026-05-20",
             "product": "Cotton Shirts",
             "hs_code": "6105.10",
             "origin": "Vietnam",
@@ -222,10 +287,11 @@ def get_fta_shipments() -> list:
             "eligibility": "eligible-unclaimed",
             "est_saving_k": 7.9,
             "rvc_threshold_pct": 40,
-            "rvc_pct": 37,   # 35 <= 37 < 40 → near-miss (was 41: above threshold, wrong)
+            "rvc_pct": 37,   # 35 <= 37 < 40 → near-miss
         },
         {
             "shipment_id": "SHP-004",
+            "entry_date": "2026-07-15",
             "product": "Steel Tubes",
             "hs_code": "7304.31",
             "origin": "Korea",
@@ -239,6 +305,7 @@ def get_fta_shipments() -> list:
         },
         {
             "shipment_id": "SHP-005",
+            "entry_date": "2026-06-28",
             "product": "Machinery Parts",
             "hs_code": "8483.10",
             "origin": "Canada",
@@ -252,6 +319,7 @@ def get_fta_shipments() -> list:
         },
         {
             "shipment_id": "SHP-006",
+            "entry_date": "2026-07-22",
             "product": "Electronic Displays",
             "hs_code": "8528.72",
             "origin": "Korea",
@@ -265,6 +333,7 @@ def get_fta_shipments() -> list:
         },
         {
             "shipment_id": "SHP-007",
+            "entry_date": "2026-06-05",
             "product": "Aluminum Rods",
             "hs_code": "7604.10",
             "origin": "Mexico",
@@ -274,10 +343,11 @@ def get_fta_shipments() -> list:
             "eligibility": "eligible-unclaimed",
             "est_saving_k": 6.9,
             "rvc_threshold_pct": 60,
-            "rvc_pct": 56,   # 55 <= 56 < 60 → near-miss (was 48: below threshold-5, wrong)
+            "rvc_pct": 56,   # 55 <= 56 < 60 → near-miss
         },
         {
             "shipment_id": "SHP-008",
+            "entry_date": "2026-07-30",
             "product": "Woven Apparel",
             "hs_code": "6203.42",
             "origin": "Vietnam",
@@ -289,9 +359,10 @@ def get_fta_shipments() -> list:
             "rvc_threshold_pct": 40,
             "rvc_pct": 61,   # 61 >= 40 → qualified
         },
-        # ── claimed ──────────────────────────────────────────────────────
+        # ── claimed ────────────────────────────────────────────────────────
         {
             "shipment_id": "SHP-009",
+            "entry_date": "2026-03-14",
             "product": "PCB Assemblies",
             "hs_code": "8534.00",
             "origin": "Korea",
@@ -305,6 +376,7 @@ def get_fta_shipments() -> list:
         },
         {
             "shipment_id": "SHP-010",
+            "entry_date": "2026-04-08",
             "product": "Auto Wiring Harness",
             "hs_code": "8544.30",
             "origin": "Mexico",
@@ -318,6 +390,7 @@ def get_fta_shipments() -> list:
         },
         {
             "shipment_id": "SHP-011",
+            "entry_date": "2025-11-20",
             "product": "Seafood Products",
             "hs_code": "0304.62",
             "origin": "Malaysia",
@@ -331,6 +404,7 @@ def get_fta_shipments() -> list:
         },
         {
             "shipment_id": "SHP-012",
+            "entry_date": "2025-12-10",
             "product": "Agricultural Produce",
             "hs_code": "0709.30",
             "origin": "Guatemala",
@@ -344,6 +418,7 @@ def get_fta_shipments() -> list:
         },
         {
             "shipment_id": "SHP-013",
+            "entry_date": "2026-01-15",
             "product": "Chemical Compounds",
             "hs_code": "2921.41",
             "origin": "Indonesia",
@@ -353,10 +428,11 @@ def get_fta_shipments() -> list:
             "eligibility": "claimed",
             "est_saving_k": 13.4,
             "rvc_threshold_pct": 60,  # RCEP Ch.29 chemicals require 60% RVC
-            "rvc_pct": 58,   # 55 <= 58 < 60 → near-miss (was threshold=40: wrong, 58 would qualify)
+            "rvc_pct": 58,   # 55 <= 58 < 60 → near-miss
         },
         {
             "shipment_id": "SHP-014",
+            "entry_date": "2026-02-28",
             "product": "Copper Wire",
             "hs_code": "7408.11",
             "origin": "Peru",
@@ -368,9 +444,10 @@ def get_fta_shipments() -> list:
             "rvc_threshold_pct": 40,
             "rvc_pct": 67,   # 67 >= 40 → qualified
         },
-        # ── not-eligible ─────────────────────────────────────────────────
+        # ── not-eligible ───────────────────────────────────────────────────
         {
             "shipment_id": "SHP-015",
+            "entry_date": "2026-05-05",
             "product": "Rare Earth Magnets",
             "hs_code": "8505.11",
             "origin": "China",
@@ -384,6 +461,7 @@ def get_fta_shipments() -> list:
         },
         {
             "shipment_id": "SHP-016",
+            "entry_date": "2026-04-22",
             "product": "Pharmaceuticals",
             "hs_code": "3004.90",
             "origin": "India",
@@ -397,6 +475,7 @@ def get_fta_shipments() -> list:
         },
         {
             "shipment_id": "SHP-017",
+            "entry_date": "2025-09-18",
             "product": "Rubber Products",
             "hs_code": "4016.99",
             "origin": "Thailand",
@@ -406,10 +485,11 @@ def get_fta_shipments() -> list:
             "eligibility": "not-eligible",
             "est_saving_k": 0.0,
             "rvc_threshold_pct": 40,
-            "rvc_pct": 28,   # 28 < 35 → fail (was 35: on near-miss boundary, ambiguous)
+            "rvc_pct": 28,   # 28 < 35 → fail
         },
         {
             "shipment_id": "SHP-018",
+            "entry_date": "2025-10-14",
             "product": "Luxury Watches",
             "hs_code": "9102.19",
             "origin": "Switzerland",

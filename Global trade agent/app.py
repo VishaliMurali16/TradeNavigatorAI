@@ -11,10 +11,8 @@ from air import AsyncAIRefinery
 
 from agents_registry import AGENTS, CLUSTERS, get_agent, agents_by_cluster
 from data_simulator import get_kpis, get_alerts, get_tariff_sources, get_tariff_feed
-from fta_simulator import (
-    get_fta_kpis, get_fta_lanes, get_fta_shipments, get_coo_requests,
-    get_roo_assessments, get_qualification_roadmap,
-)
+import fta_data_source
+from fta_data_source import SHIPMENT_TEMPLATE_CSV, COO_TEMPLATE_CSV
 
 load_dotenv()
 _API_KEY = str(os.getenv("API_KEY"))
@@ -831,16 +829,75 @@ def api_fta_explain():
     return jsonify({"explanation": text})
 
 
+# ---------------------------------------------------------------------------
+# FTA data upload / reset / template routes
+# ---------------------------------------------------------------------------
+
+@app.route("/api/fta/upload/shipments", methods=["POST"])
+def fta_upload_shipments():
+    f = request.files.get("shipment_file")
+    if f and f.filename:
+        fta_data_source.upload_shipment_data(f.read(), f.filename)
+    return redirect(url_for("agent_fta_preferential"))
+
+
+@app.route("/api/fta/upload/coo", methods=["POST"])
+def fta_upload_coo():
+    f = request.files.get("coo_file")
+    if f and f.filename:
+        fta_data_source.upload_coo_data(f.read(), f.filename)
+    return redirect(url_for("agent_fta_preferential"))
+
+
+@app.route("/api/fta/reset", methods=["POST"])
+def fta_reset():
+    fta_data_source.reset_to_simulated()
+    return redirect(url_for("agent_fta_preferential"))
+
+
+@app.route("/api/fta/template/<which>")
+def fta_template(which):
+    from flask import Response
+    if which == "shipments":
+        return Response(
+            SHIPMENT_TEMPLATE_CSV,
+            mimetype="text/csv",
+            headers={"Content-Disposition":
+                     "attachment; filename=fta_shipments_template.csv"},
+        )
+    if which == "coo":
+        return Response(
+            COO_TEMPLATE_CSV,
+            mimetype="text/csv",
+            headers={"Content-Disposition":
+                     "attachment; filename=fta_coo_template.csv"},
+        )
+    return ("Not found", 404)
+
+
 @app.route("/agent/fta_preferential")
 def agent_fta_preferential():
-    kpis         = get_fta_kpis()
-    lanes        = get_fta_lanes()
-    shipments    = get_fta_shipments()
-    coo_requests = get_coo_requests()
-    roo_items    = get_roo_assessments()
-    roadmap      = get_qualification_roadmap()
+    kpis         = fta_data_source.get_fta_kpis()
+    lanes        = fta_data_source.get_fta_lanes()
+    shipments    = fta_data_source.get_fta_shipments()
+    coo_requests = fta_data_source.get_coo_requests()
+    roo_items    = fta_data_source.get_roo_assessments()
+    roadmap      = fta_data_source.get_qualification_roadmap()
+    source       = fta_data_source.get_source_info()
+    s_msg, c_msg = fta_data_source.take_upload_messages()
+
+    # Period label comes from the data source (dynamic for uploaded data)
+    period_label = kpis.get("period_label", "")
 
     # ── Header ──────────────────────────────────────────────────────────
+    _is_sim = (source["shipment_mode"] == "simulated"
+               and source["coo_mode"]  == "simulated")
+    _subtitle = (
+        'Closing the ~23% FTA utilization gap — illustrative benchmarks requiring '
+        'client-specific quantification'
+        if _is_sim else
+        'Showing uploaded data — figures derived from your shipment and CoO files'
+    )
     header_html = (
         '<a href="/" class="back-link">← Control Tower</a>'
         '<div class="agent-detail-header" '
@@ -851,10 +908,140 @@ def agent_fta_preferential():
         'color:#A100FF;font-weight:700;">Value Capture</div>'
         '<h1 style="font-size:1.5rem;font-weight:700;">'
         'FTA &amp; Preferential Trade Agent</h1>'
-        '<div style="font-size:0.85rem;color:rgba(255,255,255,0.65);margin-top:4px;">'
-        'Closing the ~23% FTA utilization gap — illustrative benchmarks requiring '
-        'client-specific quantification</div>'
+        f'<div style="font-size:0.85rem;color:rgba(255,255,255,0.65);margin-top:4px;">'
+        f'{_subtitle}</div>'
         '</div></div>'
+    )
+
+    # ── Upload / data-source section ─────────────────────────────────────
+    # Build source badge
+    if _is_sim:
+        _src_badge = (
+            '<span style="padding:2px 10px;border-radius:4px;font-size:0.68rem;'
+            'font-weight:700;background:#f0eaf8;color:#999;letter-spacing:1px">'
+            'SIMULATED DATA</span>'
+        )
+    else:
+        _parts = []
+        if source["shipment_mode"] == "uploaded":
+            _parts.append(f'Shipments: {source["shipment_filename"]}')
+        if source["coo_mode"] == "uploaded":
+            _parts.append(f'CoO: {source["coo_filename"]}')
+        _src_badge = (
+            '<span style="padding:2px 10px;border-radius:4px;font-size:0.68rem;'
+            'font-weight:700;background:#A100FF;color:#fff;letter-spacing:1px">'
+            f'UPLOADED · {" | ".join(_parts)}</span>'
+        )
+
+    # Build upload feedback banners
+    _feedback = ""
+    for _msg, _label in [(s_msg, "Shipment"), (c_msg, "CoO")]:
+        if not _msg:
+            continue
+        if _msg["ok"]:
+            _warn_str = (" — " + "; ".join(_msg["warnings"])) if _msg["warnings"] else ""
+            _feedback += (
+                f'<div style="margin:6px 0;padding:8px 12px;background:#e6fff9;'
+                f'border-left:3px solid #12B3A3;border-radius:0 6px 6px 0;'
+                f'font-size:0.78rem;color:#0a7060;font-weight:600">'
+                f'✓ {_label} data loaded{_warn_str}</div>'
+            )
+        else:
+            _err_str = "; ".join(_msg["errors"])
+            _feedback += (
+                f'<div style="margin:6px 0;padding:8px 12px;background:#fde8e8;'
+                f'border-left:3px solid #c0392b;border-radius:0 6px 6px 0;'
+                f'font-size:0.78rem;color:#c0392b;font-weight:600">'
+                f'✗ {_label} upload failed: {_err_str}</div>'
+            )
+
+    # Auto-open the panel when there's a message or when already in uploaded mode
+    _panel_open = "open" if (_feedback or not _is_sim) else ""
+
+    # Column list hint strings
+    _shp_req_str  = ", ".join(fta_data_source.SHIPMENT_REQUIRED)
+    _shp_opt_str  = ", ".join(fta_data_source.SHIPMENT_ROO + fta_data_source.SHIPMENT_ROADMAP)
+    _coo_cols_str = ", ".join(fta_data_source.COO_REQUIRED)
+
+    upload_section = (
+        f'<details {_panel_open} style="margin-bottom:16px;border-radius:10px;'
+        'box-shadow:0 2px 8px rgba(26,5,51,0.07);background:#fff;overflow:hidden">'
+        '<summary style="padding:12px 20px;font-size:0.8rem;font-weight:700;'
+        'text-transform:uppercase;letter-spacing:1px;'
+        'display:flex;align-items:center;gap:10px;cursor:pointer;list-style:none;'
+        'user-select:none;border-bottom:1px solid #f0eaf8">'
+        '\U0001f4c2 Data Source'
+        f'<span style="margin-left:8px">{_src_badge}</span>'
+        '<span style="margin-left:auto;font-size:0.72rem;font-weight:400;'
+        'color:#A100FF;text-transform:none;letter-spacing:0">▼ upload real data</span>'
+        '</summary>'
+        '<div style="padding:16px 20px">'
+        + (_feedback if _feedback else "")
+        + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:8px">'
+        # ── Shipment upload ──
+        '<div style="border:1px solid #ede8f8;border-radius:8px;padding:14px">'
+        '<div style="font-size:0.82rem;font-weight:700;margin-bottom:4px">'
+        '\U0001f4e6 Shipment Data'
+        '</div>'
+        '<div style="font-size:0.72rem;color:#888;margin-bottom:10px">'
+        'Powers: lanes, eligibility feed, KPIs, RoO assessment, qualification roadmap'
+        '</div>'
+        f'<details style="margin-bottom:10px"><summary style="font-size:0.7rem;'
+        f'color:#A100FF;cursor:pointer">Expected columns</summary>'
+        f'<div style="font-size:0.68rem;color:#666;margin-top:6px;line-height:1.5">'
+        f'<strong>Required:</strong> {_shp_req_str}<br>'
+        f'<strong>Optional (RoO + Roadmap):</strong> {_shp_opt_str}</div></details>'
+        '<form action="/api/fta/upload/shipments" method="post" '
+        'enctype="multipart/form-data" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+        '<input type="file" name="shipment_file" accept=".csv,.xlsx" '
+        'style="font-size:0.78rem;flex:1;min-width:0">'
+        '<button type="submit" style="padding:6px 14px;background:#A100FF;color:#fff;'
+        'border:none;border-radius:6px;font-size:0.78rem;font-weight:600;cursor:pointer">'
+        'Upload</button>'
+        '<a href="/api/fta/template/shipments" '
+        'style="font-size:0.75rem;color:#A100FF;text-decoration:none;white-space:nowrap">'
+        '\U0001f4e5 Template</a>'
+        '</form>'
+        '</div>'
+        # ── CoO upload ──
+        '<div style="border:1px solid #ede8f8;border-radius:8px;padding:14px">'
+        '<div style="font-size:0.82rem;font-weight:700;margin-bottom:4px">'
+        '\U0001f4cb CoO Requests <span style="font-size:0.7rem;font-weight:400;color:#999">(optional)</span>'
+        '</div>'
+        '<div style="font-size:0.72rem;color:#888;margin-bottom:10px">'
+        'Powers: CoO Supplier Tracker — independent of shipment data'
+        '</div>'
+        f'<details style="margin-bottom:10px"><summary style="font-size:0.7rem;'
+        f'color:#A100FF;cursor:pointer">Expected columns</summary>'
+        f'<div style="font-size:0.68rem;color:#666;margin-top:6px;line-height:1.5">'
+        f'<strong>Required:</strong> {_coo_cols_str}</div></details>'
+        '<form action="/api/fta/upload/coo" method="post" '
+        'enctype="multipart/form-data" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+        '<input type="file" name="coo_file" accept=".csv,.xlsx" '
+        'style="font-size:0.78rem;flex:1;min-width:0">'
+        '<button type="submit" style="padding:6px 14px;background:#A100FF;color:#fff;'
+        'border:none;border-radius:6px;font-size:0.78rem;font-weight:600;cursor:pointer">'
+        'Upload</button>'
+        '<a href="/api/fta/template/coo" '
+        'style="font-size:0.75rem;color:#A100FF;text-decoration:none;white-space:nowrap">'
+        '\U0001f4e5 Template</a>'
+        '</form>'
+        '</div>'
+        '</div>'
+        + (
+            '<div style="margin-top:12px;padding-top:10px;border-top:1px solid #f0eaf8;'
+            'display:flex;align-items:center;gap:12px">'
+            '<form action="/api/fta/reset" method="post" style="display:inline">'
+            '<button type="submit" style="padding:5px 14px;background:#fff;color:#888;'
+            'border:1px solid #ddd;border-radius:6px;font-size:0.75rem;cursor:pointer">'
+            '↩ Reset to simulated data</button>'
+            '</form>'
+            '<span style="font-size:0.68rem;color:#bbb">'
+            'Clears all uploads and restores illustrative benchmark data</span>'
+            '</div>'
+            if not _is_sim else ""
+        )
+        + '</div></details>'
     )
 
     # ── KPI strip (4 cards) ──────────────────────────────────────────────
@@ -864,19 +1051,19 @@ def agent_fta_preferential():
         f'<div class="kpi-card" style="border-top:3px solid #A100FF">'
         f'<div class="kpi-label">Utilization Rate</div>'
         f'<div class="kpi-value">{kpis["utilization_pct"]}%</div>'
-        f'<div class="kpi-unit">Of eligible shipments</div></div>'
+        f'<div class="kpi-unit">{period_label}</div></div>'
         f'<div class="kpi-card" style="border-top:3px solid #F76C6C">'
         f'<div class="kpi-label">Unclaimed Opportunity</div>'
         f'<div class="kpi-value">${kpis["unclaimed_opportunity_m"]}M</div>'
-        f'<div class="kpi-unit">Duty savings available</div></div>'
+        f'<div class="kpi-unit">Duty savings · {period_label}</div></div>'
         f'<div class="kpi-card" style="border-top:3px solid #A100FF">'
         f'<div class="kpi-label">Retroactive Claims</div>'
         f'<div class="kpi-value">${kpis["retroactive_claims_k"]}K</div>'
-        f'<div class="kpi-unit">Claimable YTD</div></div>'
+        f'<div class="kpi-unit">{kpis["retro_window_label"]} · {period_label}</div></div>'
         f'<div class="kpi-card" style="border-top:3px solid #F5A623">'
-        f'<div class="kpi-label">CoOs Pending</div>'
-        f'<div class="kpi-value">{kpis["coo_pending"]}</div>'
-        f'<div class="kpi-unit">Supplier requests</div></div>'
+        f'<div class="kpi-label">CoOs Outstanding</div>'
+        f'<div class="kpi-value">{kpis["coo_outstanding"]}</div>'
+        f'<div class="kpi-unit">Pending + overdue + received</div></div>'
         '</div>'
     )
 
@@ -920,7 +1107,9 @@ def agent_fta_preferential():
 
     lane_section = (
         '<div class="section-card">'
-        '<div class="section-card-header">\U0001f310 FTA Lane Utilization Gap</div>'
+        f'<div class="section-card-header">\U0001f310 FTA Lane Utilization Gap'
+        f'<span style="font-size:0.72rem;font-weight:400;color:#888;'
+        f'margin-left:10px;letter-spacing:0">({period_label})</span></div>'
         '<div style="overflow-x:auto;max-height:300px;overflow-y:auto">'
         '<table style="width:100%;border-collapse:collapse">'
         f'<thead><tr>'
@@ -964,6 +1153,8 @@ def agent_fta_preferential():
             f'data-rvc-pct="{s["rvc_pct"]}" '
             f'data-rvc-threshold="{s["rvc_threshold_pct"]}">'
             f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600">{sid}</td>'
+            f'<td style="padding:10px 12px;font-size:0.78rem;color:#666;'
+            f'font-family:monospace">{s.get("entry_date","—")}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem">{s["product"]}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem;font-family:monospace">'
             f'{s["hs_code"]}</td>'
@@ -984,11 +1175,14 @@ def agent_fta_preferential():
     shipment_section = (
         '<div class="section-card">'
         '<div class="section-card-header">'
-        '\U0001f4e6 Shipment Eligibility Feed — Eligible / Unclaimed</div>'
+        f'\U0001f4e6 Shipment Eligibility Feed — Eligible / Unclaimed'
+        f'<span style="font-size:0.72rem;font-weight:400;color:#888;'
+        f'margin-left:10px;letter-spacing:0">({period_label})</span></div>'
         '<div style="overflow-x:auto">'
         '<table style="width:100%;border-collapse:collapse">'
         f'<thead><tr>'
         f'<th {th}>Shipment</th>'
+        f'<th {th}>Entry Date</th>'
         f'<th {th}>Product</th>'
         f'<th {th}>HS Code</th>'
         f'<th {th}>Lane</th>'
@@ -1026,7 +1220,9 @@ def agent_fta_preferential():
 
     coo_section = (
         '<div class="section-card">'
-        '<div class="section-card-header">\U0001f4cb CoO Supplier Tracker</div>'
+        '<div class="section-card-header">\U0001f4cb CoO Supplier Tracker'
+        '<span style="font-size:0.72rem;font-weight:400;color:#888;'
+        'margin-left:10px;letter-spacing:0">Current / Open Requests</span></div>'
         '<table style="width:100%;border-collapse:collapse">'
         f'<thead><tr>'
         f'<th {th}>Supplier</th>'
@@ -1049,28 +1245,66 @@ def agent_fta_preferential():
         "Medium": "background:#fff3cd;color:#856404",
         "High":   "background:#fde8e8;color:#c0392b",
     }
-    roo_rows = ""
-    for p in roo_items:
-        badge  = ro_styles_assess.get(p["ro_status"], "")
-        gap_cell = (
-            f'<span style="color:#c0392b;font-weight:600">−{p["gap_pct"]} pts</span>'
-            if p["gap_pct"] > 0 else
-            '<span style="color:#12B3A3;font-weight:600">—</span>'
+
+    # roo_items is a list (simulated or uploaded+has_roo) or
+    # {"unavailable": True, "missing_cols": [...]} when RoO cols are absent.
+    _roo_unavailable = isinstance(roo_items, dict) and roo_items.get("unavailable")
+
+    if _roo_unavailable:
+        _miss_str = ", ".join(roo_items.get("missing_cols", []))
+        roo_body = (
+            '<div style="padding:24px 20px;text-align:center;color:#999">'
+            '\U0001f4cb RoO Compliance Assessment requires additional upload columns:<br>'
+            f'<code style="font-size:0.78rem;color:#A100FF">{_miss_str}</code><br>'
+            '<span style="font-size:0.72rem">Add these columns to your shipment file and re-upload.</span>'
+            '</div>'
         )
-        roo_rows += (
-            '<tr style="border-bottom:1px solid #f5f3fa">'
-            f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600">{p["product"]}</td>'
-            f'<td style="padding:10px 12px;font-size:0.78rem;font-family:monospace">{p["hs_code"]}</td>'
-            f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:#A100FF">{p["fta_name"]}</td>'
-            f'<td style="padding:10px 12px;font-size:0.78rem;color:#555">{p["roo_test_type"]}</td>'
-            f'<td style="padding:10px 12px;font-size:0.82rem;text-align:center">'
-            f'{p["rvc_pct"]}% / {p["rvc_threshold_pct"]}%</td>'
-            f'<td style="padding:10px 12px;text-align:center">'
-            f'<span style="padding:2px 8px;border-radius:4px;font-size:0.72rem;'
-            f'font-weight:600;{badge}">{p["ro_status"]}</span></td>'
-            f'<td style="padding:10px 12px;text-align:center">{gap_cell}</td>'
-            f'<td style="padding:10px 12px;font-size:0.78rem;color:#666">{p["compliance_note"]}</td>'
-            '</tr>'
+        _roo_footer = ""
+    else:
+        roo_rows = ""
+        for p in roo_items:
+            badge    = ro_styles_assess.get(p["ro_status"], "")
+            gap_cell = (
+                f'<span style="color:#c0392b;font-weight:600">−{p["gap_pct"]} pts</span>'
+                if p["gap_pct"] > 0 else
+                '<span style="color:#12B3A3;font-weight:600">—</span>'
+            )
+            roo_rows += (
+                '<tr style="border-bottom:1px solid #f5f3fa">'
+                f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600">{p["product"]}</td>'
+                f'<td style="padding:10px 12px;font-size:0.78rem;font-family:monospace">{p["hs_code"]}</td>'
+                f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:#A100FF">{p["fta_name"]}</td>'
+                f'<td style="padding:10px 12px;font-size:0.78rem;color:#555">{p["roo_test_type"]}</td>'
+                f'<td style="padding:10px 12px;font-size:0.82rem;text-align:center">'
+                f'{p["rvc_pct"]}% / {p["rvc_threshold_pct"]}%</td>'
+                f'<td style="padding:10px 12px;text-align:center">'
+                f'<span style="padding:2px 8px;border-radius:4px;font-size:0.72rem;'
+                f'font-weight:600;{badge}">{p["ro_status"]}</span></td>'
+                f'<td style="padding:10px 12px;text-align:center">{gap_cell}</td>'
+                f'<td style="padding:10px 12px;font-size:0.78rem;color:#666">{p["compliance_note"]}</td>'
+                '</tr>'
+            )
+        roo_body = (
+            '<div style="overflow-x:auto;max-height:280px;overflow-y:auto">'
+            '<table style="width:100%;border-collapse:collapse">'
+            f'<thead><tr>'
+            f'<th {th}>Product</th>'
+            f'<th {th}>HS Code</th>'
+            f'<th {th}>FTA</th>'
+            f'<th {th}>RoO Test</th>'
+            f'<th {th}>RVC (Actual / Req\'d)</th>'
+            f'<th {th}>Status</th>'
+            f'<th {th}>Gap</th>'
+            f'<th {th}>Compliance Note</th>'
+            '</tr></thead>'
+            f'<tbody>{roo_rows}</tbody>'
+            '</table></div>'
+        )
+        _roo_footer = (
+            '<div style="padding:8px 16px;font-size:0.68rem;color:#bbb;border-top:1px solid #f0eaf8">'
+            + ('Illustrative benchmarks — requires client-specific quantification.'
+               if _is_sim else 'Derived from uploaded shipment data.')
+            + '</div>'
         )
 
     roo_section = (
@@ -1084,23 +1318,8 @@ def agent_fta_preferential():
         '<span style="margin-left:auto;font-size:0.72rem;font-weight:400;'
         'color:#A100FF;text-transform:none;letter-spacing:0">▼ expand</span>'
         '</summary>'
-        '<div style="overflow-x:auto;max-height:280px;overflow-y:auto">'
-        '<table style="width:100%;border-collapse:collapse">'
-        f'<thead><tr>'
-        f'<th {th}>Product</th>'
-        f'<th {th}>HS Code</th>'
-        f'<th {th}>FTA</th>'
-        f'<th {th}>RoO Test</th>'
-        f'<th {th}>RVC (Actual / Req\'d)</th>'
-        f'<th {th}>Status</th>'
-        f'<th {th}>Gap</th>'
-        f'<th {th}>Compliance Note</th>'
-        '</tr></thead>'
-        f'<tbody>{roo_rows}</tbody>'
-        '</table></div>'
-        '<div style="padding:8px 16px;font-size:0.68rem;color:#bbb;border-top:1px solid #f0eaf8">'
-        'Illustrative benchmarks — requires client-specific quantification.</div>'
-        '</details>'
+        + roo_body + _roo_footer
+        + '</details>'
     )
 
     # ── Qualification Roadmap (collapsible) ──────────────────────────────
@@ -1154,13 +1373,15 @@ def agent_fta_preferential():
         '</table></div>'
         '<div style="padding:8px 16px;font-size:0.68rem;color:#bbb;border-top:1px solid #f0eaf8">'
         'Opportunity figures sourced from FTA Lane Utilization Gap table — same formula. '
-        'Illustrative benchmarks — requires client-specific quantification.</div>'
+        + ('Illustrative benchmarks — requires client-specific quantification.'
+           if _is_sim else 'Derived from uploaded shipment data.')
+        + '</div>'
         '</details>'
     )
 
     # ── Compose page ─────────────────────────────────────────────────────
     content = (
-        header_html + kpi_html
+        header_html + upload_section + kpi_html
         + '<div style="display:flex;gap:20px;align-items:flex-start;margin-bottom:20px">'
         + f'<div style="flex:3;min-width:0">{lane_section}{shipment_section}</div>'
         + f'<div style="flex:2;min-width:0">{coo_section}</div>'
