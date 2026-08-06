@@ -1,0 +1,93 @@
+# industries.yaml
+# Config-driven industry catalog for TradeNavigator AI.
+# Adding a new industry here requires NO code changes.
+# Promote to a DB by replacing _load_catalog() in industry_catalog.py.
+#
+# client_data_filter resolution strategy (Adjustment 2):
+#   1. If the client shipment record has the field named by explicit_tag_field,
+#      compare its value to explicit_tag_value (case-insensitive). Match = belongs.
+#      Present but non-matching = does NOT belong (explicit tag is authoritative).
+#   2. No explicit tag field in record → classify by HS code:
+#      a. hs_codes exact match (6-digit, stripped of dots) — higher specificity
+#      b. hs_chapters match (first 2 digits of hs6 in the chapter list)
+#   Overlap: if a chapter maps to multiple industries and no hs_code disambiguates,
+#   classify_shipment() returns True for ALL matching industries — the shipment
+#   appears in multiple views. hs_codes exact match always beats chapter-only match.
+
+industries:
+
+  - name: electronics
+    enabled: true
+    display_name: "Consumer Electronics"
+    descriptor: "Laptops, tablets, semiconductors, components"
+
+    # Reference layer — curated HS codes and lanes (never client data)
+    hs_chapters: [84, 85]
+    hs_codes:
+      - "8471.30"    # Laptops / portable computers
+      - "8542.31"    # Integrated circuits
+      - "8528.72"    # TV reception apparatus
+    representative_lanes:
+      - hs_code: "8471.30"
+        origin: "VN"
+        destination: "US"
+      - hs_code: "8471.30"
+        origin: "CN"
+        destination: "US"
+    tariff_context: >
+      Section 301 tariff lists heavily target HS 84/85 electronics from China.
+      USMCA provides preferential treatment for qualifying North American content.
+
+    # Client data layer — how to tag a shipment record to this industry
+    client_data_filter:
+      explicit_tag_field: "industry_tag"    # field name on client shipment record
+      explicit_tag_value: "electronics"     # expected value (case-insensitive)
+      # Fallback: if field absent, classify by hs_codes / hs_chapters above
+
+
+  - name: food_beverage
+    enabled: true
+    display_name: "Food & Beverage"
+    descriptor: "Dairy, meat, processed foods, beverages"
+
+    hs_chapters: [2, 4, 16, 17, 19, 20, 21, 22]
+    hs_codes:
+      - "0406.90"    # Cheese and curd
+      - "2009.11"    # Orange juice
+      - "1602.32"    # Chicken preparations
+    representative_lanes:
+      - hs_code: "0406.90"
+        origin: "KR"
+        destination: "US"
+    tariff_context: >
+      Agricultural tariffs frequently involve TRQs, safeguard triggers, and
+      seasonal duty variations. KORUS and USMCA provide key preferences.
+
+    client_data_filter:
+      explicit_tag_field: "industry_tag"
+      explicit_tag_value: "food_beverage"
+
+
+  - name: automotive
+    enabled: true
+    display_name: "Automotive"
+    descriptor: "Vehicles, parts, assemblies"
+
+    hs_chapters: [87]
+    hs_codes:
+      - "8703.23"    # Passenger vehicles — cylinder capacity 1000–1500 cc
+      - "8708.99"    # Other parts and accessories
+    representative_lanes:
+      - hs_code: "8703.23"
+        origin: "MX"
+        destination: "US"
+      - hs_code: "8708.99"
+        origin: "DE"
+        destination: "US"
+    tariff_context: >
+      USMCA RVC/CTH rules govern most North American automotive trade.
+      Section 232 steel and aluminium tariffs affect parts costs across all lanes.
+
+    client_data_filter:
+      explicit_tag_field: "industry_tag"
+      explicit_tag_value: "automotive"

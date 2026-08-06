@@ -6,17 +6,19 @@ import os
 import threading
 import time
 
-from flask import Flask, render_template_string, redirect, url_for, jsonify, request
+from flask import Flask, render_template_string, redirect, url_for, jsonify, request, session
 from dotenv import load_dotenv
 from air import AsyncAIRefinery
 
 from agents_registry import AGENTS, CLUSTERS, get_agent, agents_by_cluster
 from data_simulator import get_kpis, get_alerts, get_tariff_sources, get_tariff_feed
+from industry_catalog import get_industries, get_industry_profile, default_industry, classify_shipment
 
 load_dotenv()
 _API_KEY = str(os.getenv("API_KEY"))
 
 app = Flask(__name__)
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "tnav-dev-secret-change-in-prod")
 
 # Cache so repeated refreshes never trigger a second AI call
 _ai_cache: dict = {"text": None, "ts": 0.0, "lock": threading.Lock(), "in_flight": False}
@@ -1074,6 +1076,137 @@ body {
     display: flex; align-items: center; justify-content: center;
     cursor: not-allowed; font-size: 1.1rem; flex-shrink: 0;
 }
+
+/* ── Top bar & Workspace avatar ───────────────────────────────── */
+.topbar {
+    position: fixed;
+    top: 0; left: 260px; right: 0; height: 52px;
+    background: linear-gradient(90deg, #1a0533 0%, #2d0a5a 100%);
+    border-bottom: 1px solid rgba(161,0,255,0.2);
+    display: flex; align-items: center; justify-content: flex-end;
+    padding: 0 20px;
+    z-index: 110;
+    box-sizing: border-box;
+}
+.topbar-avatar-wrap {
+    position: relative;
+    display: flex; align-items: center;
+}
+.topbar-avatar {
+    width: 36px; height: 36px; border-radius: 50%;
+    background: rgba(161,0,255,0.18);
+    border: 2px solid #A100FF;
+    color: #fff; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    padding: 0; outline: none;
+    transition: background 0.18s, box-shadow 0.18s;
+}
+.topbar-avatar svg { width: 20px; height: 20px; }
+.topbar-avatar:hover {
+    background: rgba(161,0,255,0.35);
+    box-shadow: 0 0 0 3px rgba(161,0,255,0.25);
+}
+.topbar-avatar-tooltip {
+    position: absolute;
+    right: 44px; top: 50%; transform: translateY(-50%);
+    background: rgba(26,5,51,0.92); color: #fff;
+    font-size: 0.72rem; font-weight: 600;
+    padding: 4px 10px; border-radius: 6px;
+    white-space: nowrap; pointer-events: none;
+    opacity: 0; transition: opacity 0.15s;
+}
+.topbar-avatar-wrap:hover .topbar-avatar-tooltip { opacity: 1; }
+.workspace-dropdown {
+    position: absolute;
+    top: calc(100% + 10px); right: 0;
+    background: #fff; border-radius: 10px;
+    box-shadow: 0 8px 32px rgba(26,5,51,0.18), 0 2px 8px rgba(0,0,0,0.08);
+    min-width: 180px; overflow: hidden;
+    z-index: 300;
+    opacity: 0; pointer-events: none;
+    transform: translateY(-6px);
+    transition: opacity 0.15s, transform 0.15s;
+}
+.workspace-dropdown.open {
+    opacity: 1; pointer-events: auto; transform: translateY(0);
+}
+.ws-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 18px;
+    color: #1a0533; text-decoration: none;
+    font-size: 0.85rem; font-weight: 500;
+    transition: background 0.12s;
+}
+.ws-item:hover { background: rgba(161,0,255,0.07); color: #A100FF; }
+.ws-icon { font-size: 1rem; }
+.main-content { padding-top: calc(52px + 28px); }
+@media (max-width: 760px) {
+    .topbar { left: 0; }
+    .main-content { padding-top: calc(52px + 20px); }
+}
+
+/* ── Industry lens pill & picker ─────────────────────────────── */
+.topbar { gap: 8px; }
+.industry-pill-wrap {
+    position: relative;
+    display: flex; align-items: center;
+    margin-right: 4px;
+}
+.industry-pill {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 14px;
+    background: rgba(161,0,255,0.15);
+    border: 1.5px solid rgba(161,0,255,0.45);
+    border-radius: 999px;
+    color: #fff;
+    font-size: 0.78rem; font-weight: 600;
+    cursor: pointer; white-space: nowrap;
+    transition: background 0.15s, border-color 0.15s;
+}
+.industry-pill:hover {
+    background: rgba(161,0,255,0.30);
+    border-color: #A100FF;
+}
+.industry-picker {
+    position: absolute;
+    top: calc(100% + 10px); left: 0;
+    background: #fff; border-radius: 10px;
+    box-shadow: 0 8px 32px rgba(26,5,51,0.18), 0 2px 8px rgba(0,0,0,0.08);
+    min-width: 260px; overflow: hidden;
+    z-index: 300;
+    opacity: 0; pointer-events: none;
+    transform: translateY(-6px);
+    transition: opacity 0.15s, transform 0.15s;
+}
+.industry-picker.open { opacity: 1; pointer-events: auto; transform: translateY(0); }
+.ip-header {
+    padding: 10px 16px 8px;
+    font-size: 0.63rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 1.5px;
+    color: #A100FF;
+    border-bottom: 1px solid #f0eaf8;
+}
+.ip-item {
+    display: block; padding: 10px 16px;
+    text-decoration: none; color: #1a0533;
+    border-bottom: 1px solid #f9f6ff;
+    transition: background 0.12s;
+}
+.ip-item:last-child { border-bottom: 0; }
+.ip-item:hover { background: rgba(161,0,255,0.06); }
+.ip-item.active { background: rgba(161,0,255,0.09); }
+.ip-name { font-size: 0.83rem; font-weight: 600; }
+.ip-desc { font-size: 0.71rem; color: #888; margin-top: 2px; }
+.industry-context-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 16px;
+    background: rgba(161,0,255,0.06);
+    border: 1px solid rgba(161,0,255,0.15);
+    border-radius: 8px;
+    font-size: 0.8rem; color: #5a3d7a;
+    margin-bottom: 18px;
+}
+.industry-context-bar strong { color: #A100FF; font-weight: 700; }
 """
 
 # ---------------------------------------------------------------------------
@@ -1098,16 +1231,6 @@ def _sidebar_html(active_id: str = "") -> str:
             f'{cluster["name"]}</div>{rows}'
         )
 
-    workspace_links = [
-        ("profile", "👤 Profile", "/profile"),
-        ("settings", "⚙️ Settings", "/settings"),
-        ("action-logs", "🗂️ Action Logs", "/action-logs"),
-    ]
-    workspace_rows = "".join(
-        f'<a href="{url}" class="nav-agent {"active" if active_id == item_id else ""}">{label}</a>'
-        for item_id, label, url in workspace_links
-    )
-
     home_active = "active" if not active_id else ""
     return f"""
     <nav class="sidebar">
@@ -1117,8 +1240,6 @@ def _sidebar_html(active_id: str = "") -> str:
       </div>
       <div class="sidebar-nav">
         <a href="/" class="nav-home {home_active}">🗼 Control Tower</a>
-        <div class="cluster-label" style="color:#A100FF">Workspace</div>
-        {workspace_rows}
         {cluster_blocks}
       </div>
       <button class="ai-chat-trigger" onclick="openAIChat()">
@@ -1145,9 +1266,43 @@ BASE = """<!DOCTYPE html>
 <style>{{ css }}</style>
 </head>
 <body>
+<!-- ── Workspace top bar ──────────────────────────────────────── -->
+<div class="topbar">
+  <div class="industry-pill-wrap">
+    <button class="industry-pill" id="industryBtn" onclick="toggleIndustryPicker()" aria-label="Switch industry lens">
+      🏭 {{ industry.display_name }} ▾
+    </button>
+    <div class="industry-picker" id="industryPicker">
+      <div class="ip-header">Industry Lens</div>
+      {% for ind in all_industries %}
+      <a href="/set-industry?name={{ ind.name }}" class="ip-item {% if ind.name == industry.name %}active{% endif %}">
+        <div class="ip-name">{{ ind.display_name }}</div>
+        <div class="ip-desc">{{ ind.descriptor }}</div>
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="topbar-avatar-wrap">
+    <button class="topbar-avatar" id="workspaceBtn" onclick="toggleWorkspaceMenu()" aria-label="Workspace">
+      <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="12" cy="8" r="4" fill="currentColor"/>
+        <path d="M4 20c0-4 3.582-7 8-7s8 3 8 7" fill="currentColor"/>
+      </svg>
+    </button>
+    <span class="topbar-avatar-tooltip">Workspace</span>
+    <div class="workspace-dropdown" id="workspaceMenu">
+      <a href="/profile" class="ws-item"><span class="ws-icon">👤</span>Profile</a>
+      <a href="/settings" class="ws-item"><span class="ws-icon">⚙️</span>Settings</a>
+      <a href="/action-logs" class="ws-item"><span class="ws-icon">🗂️</span>Action Logs</a>
+    </div>
+  </div>
+</div>
 {{ sidebar | safe }}
 <main class="main">
   <div class="main-content">
+    {% if industry.name != 'all' %}
+    <div class="industry-context-bar">🏭 <strong>{{ industry.display_name }}</strong> — {{ industry.descriptor }}</div>
+    {% endif %}
     {{ content | safe }}
     <div class="footer">TradeNavigator AI &mdash; Accenture &copy; 2025</div>
   </div>
@@ -1241,9 +1396,41 @@ BASE = """<!DOCTYPE html>
   window.closeAIChat = closeAIChat;
   window.closeAIChatOverlay = closeAIChatOverlay;
 
-  // ESC key closes the chat
+  // Workspace avatar dropdown
+  function toggleWorkspaceMenu() {
+    document.getElementById('workspaceMenu').classList.toggle('open');
+  }
+  window.toggleWorkspaceMenu = toggleWorkspaceMenu;
+  document.addEventListener('click', function(e) {
+    var btn = document.getElementById('workspaceBtn');
+    var menu = document.getElementById('workspaceMenu');
+    if (btn && menu && !btn.contains(e.target) && !menu.contains(e.target)) {
+      menu.classList.remove('open');
+    }
+  });
+
+  // Industry lens picker
+  function toggleIndustryPicker() {
+    document.getElementById('industryPicker').classList.toggle('open');
+  }
+  window.toggleIndustryPicker = toggleIndustryPicker;
+  document.addEventListener('click', function(e) {
+    var iBtn = document.getElementById('industryBtn');
+    var iPicker = document.getElementById('industryPicker');
+    if (iBtn && iPicker && !iBtn.contains(e.target) && !iPicker.contains(e.target)) {
+      iPicker.classList.remove('open');
+    }
+  });
+
+  // ESC key closes all overlays
   document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') closeAIChat();
+    if (e.key === 'Escape') {
+      closeAIChat();
+      var menu = document.getElementById('workspaceMenu');
+      if (menu) menu.classList.remove('open');
+      var picker = document.getElementById('industryPicker');
+      if (picker) picker.classList.remove('open');
+    }
   });
 })();
 </script>
@@ -1252,11 +1439,31 @@ BASE = """<!DOCTYPE html>
 </html>"""
 
 # ---------------------------------------------------------------------------
+# Industry lens — session helper + route
+# ---------------------------------------------------------------------------
+
+def _current_industry() -> dict:
+    """Return the active industry from session, falling back to the 'all' default."""
+    name = session.get("industry", default_industry()["name"])
+    return get_industry_profile(name) or default_industry()
+
+
+@app.route("/set-industry")
+def set_industry():
+    """Set the industry lens for this session and redirect back to the referrer."""
+    name = request.args.get("name", "")
+    if get_industry_profile(name):          # validates against catalog (includes 'all')
+        session["industry"] = name
+    return redirect(request.referrer or "/")
+
+
+# ---------------------------------------------------------------------------
 # Control Tower (home) — renders instantly; AI summary fetched by JS
 # ---------------------------------------------------------------------------
 
 @app.route("/")
 def control_tower():
+    industry = _current_industry()
     kpis   = get_kpis()
     alerts = get_alerts()
 
@@ -1608,11 +1815,14 @@ def control_tower():
         sidebar=_sidebar_html(""),
         content=content,
         scripts=scripts,
+        industry=industry,
+        all_industries=get_industries(),
     )
 
 
 @app.route("/profile")
 def profile_page():
+    industry = _current_industry()
     content = f"""
     <div class="page-shell">
       <div class="page-card">
@@ -1642,11 +1852,14 @@ def profile_page():
         sidebar=_sidebar_html("profile"),
         content=content,
         scripts="",
+        industry=industry,
+        all_industries=get_industries(),
     )
 
 
 @app.route("/settings")
 def settings_page():
+    industry = _current_industry()
     content = f"""
     <div class="page-shell">
       <div class="page-card">
@@ -1667,11 +1880,14 @@ def settings_page():
         sidebar=_sidebar_html("settings"),
         content=content,
         scripts="",
+        industry=industry,
+        all_industries=get_industries(),
     )
 
 
 @app.route("/action-logs")
 def action_logs_page():
+    industry = _current_industry()
     rows = _render_action_log_rows()
 
     content = f"""
@@ -1701,6 +1917,8 @@ def action_logs_page():
         sidebar=_sidebar_html("action-logs"),
         content=content,
         scripts="",
+        industry=industry,
+        all_industries=get_industries(),
     )
 
 
@@ -1710,6 +1928,7 @@ def action_logs_page():
 
 @app.route("/agent/<agent_id>")
 def agent_detail(agent_id):
+    industry = _current_industry()
     agent = get_agent(agent_id)
     if not agent:
         return redirect(url_for("control_tower"))
@@ -2030,6 +2249,8 @@ def agent_detail(agent_id):
         sidebar=_sidebar_html(agent_id),
         content=header_html + body_html,
         scripts=scripts if agent["status"] != "coming_soon" else "",
+        industry=industry,
+        all_industries=get_industries(),
     )
 
 
