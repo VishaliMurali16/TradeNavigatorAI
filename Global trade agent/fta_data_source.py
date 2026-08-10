@@ -147,6 +147,133 @@ _FTA_ACTIONS_DEFAULT: tuple[str, str] = (
     "Audit product BOM against applicable FTA rules-of-origin requirements",
 )
 
+# ── Coded-value normalisation ─────────────────────────────────────────────────
+
+def _map_coded_col(
+    df: pd.DataFrame,
+    col: str,
+    value_map: dict,      # lower-cased key → canonical SAP code
+    canonical_set: set,   # already-valid codes — left unchanged
+    fallback: str,        # used in warning text only; applied downstream
+    valid_desc: str,      # human-readable accepted-values description
+) -> "tuple[pd.DataFrame, list[str], list[str]]":
+    """
+    Normalise values in *col* using *value_map*.
+    Values already in *canonical_set* are skipped.
+    Returns (df_copy, info_msgs, warning_msgs).
+
+    info_msgs     — successful translations to report to the user (green/info).
+    warning_msgs  — values that could NOT be mapped; these will hit the downstream
+                    fallback (e.g. 'N' for PREF_STATUS) and affect KPI totals.
+    """
+    df = df.copy()
+    infos:    list[str] = []
+    warnings: list[str] = []
+
+    raw = df[col].dropna().astype(str).str.strip()
+    unique_raw = raw.unique()
+
+    translations: dict[str, str] = {}   # original cell text → canonical code
+    unmapped_vals: list[str] = []
+
+    for v in unique_raw:
+        if v.upper() in canonical_set:
+            continue                          # already a valid SAP code
+        canonical = value_map.get(v.lower())
+        if canonical is not None:
+            translations[v] = canonical
+        else:
+            unmapped_vals.append(v)
+
+    if translations:
+        def _remap(cell):
+            if pd.isna(cell):
+                return cell
+            s = str(cell).strip()
+            return translations.get(s, s)
+        df[col] = df[col].apply(_remap)
+        trans_str = ", ".join(
+            f"'{k}' → {v}" for k, v in sorted(translations.items())
+        )
+        infos.append(f"Normalised {col}: {trans_str}.")
+
+    if unmapped_vals:
+        count = int(
+            df[col].astype(str).str.strip().isin(unmapped_vals).sum()
+        )
+        warnings.append(
+            f"{col}: {count} row(s) with unrecognised value(s) "
+            f"{sorted(unmapped_vals)!r} — accepted {valid_desc}. "
+            f"These rows will default to '{fallback}' and are excluded "
+            f"from eligibility KPIs."
+        )
+
+    return df, infos, warnings
+
+
+def _normalise_coded_values(
+    df: pd.DataFrame,
+) -> "tuple[pd.DataFrame, list[str], list[str]]":
+    """
+    Normalise all coded SAP fields in a shipment DataFrame in-place (copy):
+      PREF_STATUS  E / U / N
+      ROO_STATUS   Q / M / F
+
+    Returns (df_normalised, info_msgs, warning_msgs).
+    """
+    import fta_mapping as _fm   # lazy — avoids any startup circulars
+
+    infos:    list[str] = []
+    warnings: list[str] = []
+
+    if "PREF_STATUS" in df.columns:
+        df, i, w = _map_coded_col(
+            df, "PREF_STATUS",
+            _fm.PREF_STATUS_VALUES, {"E", "U", "N"},
+            fallback="N",
+            valid_desc="E (claimed), U (unclaimed), N (not-eligible)",
+        )
+        infos.extend(i);    warnings.extend(w)
+
+    if "ROO_STATUS" in df.columns:
+        df, i, w = _map_coded_col(
+            df, "ROO_STATUS",
+            _fm.ROO_STATUS_VALUES, {"Q", "M", "F"},
+            fallback="F",
+            valid_desc="Q (qualified), M (near-miss), F (fail)",
+        )
+        infos.extend(i);    warnings.extend(w)
+
+    return df, infos, warnings
+
+
+def _normalise_coo_coded_values(
+    df: pd.DataFrame,
+) -> "tuple[pd.DataFrame, list[str], list[str]]":
+    """
+    Normalise coded SAP fields in a CoO DataFrame in-place (copy):
+      POO_STATUS   PENDING / RECEIVED / OVERDUE / VALIDATED
+
+    Returns (df_normalised, info_msgs, warning_msgs).
+    """
+    import fta_mapping as _fm
+
+    infos:    list[str] = []
+    warnings: list[str] = []
+
+    if "POO_STATUS" in df.columns:
+        df, i, w = _map_coded_col(
+            df, "POO_STATUS",
+            _fm.POO_STATUS_VALUES,
+            {"PENDING", "RECEIVED", "OVERDUE", "VALIDATED"},
+            fallback="PENDING",
+            valid_desc="PENDING, RECEIVED, OVERDUE, VALIDATED",
+        )
+        infos.extend(i);    warnings.extend(w)
+
+    return df, infos, warnings
+
+
 # ── Thread-safe in-memory state ───────────────────────────────────────────────
 
 _lock = threading.Lock()
@@ -226,14 +353,20 @@ def _validate_shipment(
 
     if "PREF_STATUS" in df.columns:
         valid_ps = {"E", "U", "N"}
-        bad_ps = (
-            set(df["PREF_STATUS"].dropna().str.strip().str.upper().unique()) - valid_ps
-        )
+        bad_ps = set(
+            df["PREF_STATUS"].dropna().astype(str).str.strip().str.upper().unique()
+        ) - valid_ps
         if bad_ps:
+            count_bad = int(
+                (~df["PREF_STATUS"].astype(str).str.strip().str.upper()
+                   .isin(valid_ps) & df["PREF_STATUS"].notna()).sum()
+            )
             warnings.append(
-                f"Unrecognised PREF_STATUS values {bad_ps!r} — "
-                "accepted: E (claimed), U (unclaimed), N (not-eligible). "
-                "Unrecognised values treated as N."
+                f"PREF_STATUS: {count_bad} row(s) still have unrecognised "
+                f"values {sorted(bad_ps)!r} after auto-normalisation — "
+                "accepted E (claimed), U (unclaimed), N (not-eligible). "
+                "These rows are treated as N (not eligible) and excluded "
+                "from eligibility KPIs."
             )
 
     has_roo     = all(c in df.columns for c in SHIPMENT_ROO)
@@ -272,14 +405,19 @@ def _validate_coo(df: pd.DataFrame) -> tuple[bool, list[str], list[str]]:
 
     if "POO_STATUS" in df.columns:
         valid_s = {"PENDING", "RECEIVED", "OVERDUE", "VALIDATED"}
-        bad_s = (
-            set(df["POO_STATUS"].dropna().str.strip().str.upper().unique()) - valid_s
-        )
+        bad_s = set(
+            df["POO_STATUS"].dropna().astype(str).str.strip().str.upper().unique()
+        ) - valid_s
         if bad_s:
+            count_bad = int(
+                (~df["POO_STATUS"].astype(str).str.strip().str.upper()
+                   .isin(valid_s) & df["POO_STATUS"].notna()).sum()
+            )
             warnings.append(
-                f"Unrecognised POO_STATUS values {bad_s!r} — "
-                "accepted: PENDING, RECEIVED, OVERDUE, VALIDATED. "
-                "Unrecognised values treated as PENDING."
+                f"POO_STATUS: {count_bad} row(s) still have unrecognised "
+                f"values {sorted(bad_s)!r} after auto-normalisation — "
+                "accepted PENDING, RECEIVED, OVERDUE, VALIDATED. "
+                "These rows are treated as PENDING."
             )
 
     return len(errors) == 0, errors, warnings
@@ -601,7 +739,9 @@ def upload_shipment_data(file_bytes: bytes, filename: str) -> dict:
         return result
 
     df = _normalise_cols(raw_df)
+    df, norm_infos, norm_warns = _normalise_coded_values(df)
     ok, errors, warnings, has_roo, has_roadmap = _validate_shipment(df)
+    warnings = norm_infos + norm_warns + warnings   # prepend normalisation context
 
     if ok:
         with _lock:
@@ -633,7 +773,9 @@ def upload_coo_data(file_bytes: bytes, filename: str) -> dict:
         return result
 
     df = _normalise_cols(raw_df)
+    df, norm_infos, norm_warns = _normalise_coo_coded_values(df)
     ok, errors, warnings = _validate_coo(df)
+    warnings = norm_infos + norm_warns + warnings   # prepend normalisation context
 
     if ok:
         with _lock:
@@ -687,7 +829,12 @@ def apply_mapping_and_load_shipments(
     df_renamed = df.rename(columns=rename)
     df_renamed  = _normalise_cols(df_renamed)
 
+    # Normalise coded field values BEFORE validation so validators see SAP codes.
+    df_renamed, norm_infos, norm_warns = _normalise_coded_values(df_renamed)
+
     ok, errors, warnings, has_roo, has_roadmap = _validate_shipment(df_renamed)
+    # Prepend normalisation context so users know what was auto-translated.
+    warnings = norm_infos + norm_warns + warnings
 
     # We accept the data even when optional sections (RoO, Roadmap) are absent;
     # _validate_shipment returns ok=False only when required cols are missing.

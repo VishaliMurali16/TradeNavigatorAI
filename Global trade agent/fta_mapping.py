@@ -146,6 +146,113 @@ _SYNONYMS: dict[str, list[str]] = {
     ],
 }
 
+# ── Value normalisation maps for coded fields ─────────────────────────────────
+# Keys are lower-cased raw cell values; values are canonical SAP codes.
+# Used by fta_data_source._normalise_coded_values() and sanity_warnings().
+
+PREF_STATUS_VALUES: dict[str, str] = {
+    # → E  Claimed / Eligible-Claimed
+    "e":                    "E",
+    "claimed":              "E",
+    "claim":                "E",
+    "eligible claimed":     "E",
+    "eligible-claimed":     "E",
+    "preference claimed":   "E",
+    "fta claimed":          "E",
+    "preferential":         "E",
+    "claimed preference":   "E",
+    # → U  Eligible but not yet claimed
+    "u":                    "U",
+    "unclaimed":            "U",
+    "eligible unclaimed":   "U",
+    "eligible-unclaimed":   "U",
+    "eligible (unclaimed)": "U",
+    "underclaimed":         "U",
+    "under-claimed":        "U",
+    "eligible":             "U",
+    "fta eligible":         "U",
+    "preference eligible":  "U",
+    "unclaimed preference": "U",
+    # → N  Not eligible for preference
+    "n":                    "N",
+    "not eligible":         "N",
+    "not-eligible":         "N",
+    "ineligible":           "N",
+    "non-eligible":         "N",
+    "no preference":        "N",
+    "not preferential":     "N",
+    "excluded":             "N",
+    "n/a":                  "N",
+    "na":                   "N",
+    "not applicable":       "N",
+    "does not qualify":     "N",
+}
+
+ROO_STATUS_VALUES: dict[str, str] = {
+    # → Q  Qualified / Passes RoO
+    "q":                "Q",
+    "qualified":        "Q",
+    "qualify":          "Q",
+    "pass":             "Q",
+    "passed":           "Q",
+    "compliant":        "Q",
+    "meets roo":        "Q",
+    "roo pass":         "Q",
+    "qualifying":       "Q",
+    # → M  Near-Miss
+    "m":                "M",
+    "near-miss":        "M",
+    "near miss":        "M",
+    "nearmiss":         "M",
+    "near_miss":        "M",
+    "borderline":       "M",
+    "marginal":         "M",
+    "almost":           "M",
+    # → F  Fail / Does not qualify
+    "f":                "F",
+    "fail":             "F",
+    "failed":           "F",
+    "failure":          "F",
+    "does not qualify": "F",
+    "non-compliant":    "F",
+    "non compliant":    "F",
+    "roo fail":         "F",
+    "not qualifying":   "F",
+    "disqualified":     "F",
+}
+
+POO_STATUS_VALUES: dict[str, str] = {
+    # → PENDING
+    "pending":       "PENDING",
+    "awaiting":      "PENDING",
+    "not received":  "PENDING",
+    "outstanding":   "PENDING",
+    "in progress":   "PENDING",
+    "requested":     "PENDING",
+    "open":          "PENDING",
+    # → RECEIVED
+    "received":      "RECEIVED",
+    "submitted":     "RECEIVED",
+    "filed":         "RECEIVED",
+    "sent":          "RECEIVED",
+    "provided":      "RECEIVED",
+    # → OVERDUE
+    "overdue":       "OVERDUE",
+    "late":          "OVERDUE",
+    "expired":       "OVERDUE",
+    "past due":      "OVERDUE",
+    "past deadline": "OVERDUE",
+    "missed":        "OVERDUE",
+    # → VALIDATED
+    "validated":     "VALIDATED",
+    "approved":      "VALIDATED",
+    "accepted":      "VALIDATED",
+    "confirmed":     "VALIDATED",
+    "verified":      "VALIDATED",
+    "complete":      "VALIDATED",
+    "completed":     "VALIDATED",
+}
+
 
 def _normalize(s: str) -> str:
     """Lower-case, strip, collapse whitespace and underscores."""
@@ -343,19 +450,49 @@ def sanity_warnings(
                 warns[sap_name] = f"Expected numeric monetary value — samples: {', '.join(vals[:3])}"
 
         elif sap_name == "PREF_STATUS":
-            valid = {"e", "u", "n"}
-            bad = [v for v in vals if v.strip().lower() not in valid]
-            if bad:
-                warns[sap_name] = (
-                    f"Values will be normalised — expected E/U/N, got: {', '.join(bad[:3])}"
+            will_map:  dict[str, str] = {}   # original → canonical (deduped)
+            unrecog:   list[str] = []
+            for v in vals:
+                key = v.strip().lower()
+                if key in PREF_STATUS_VALUES:
+                    code = PREF_STATUS_VALUES[key]
+                    if v.strip().upper() != code:       # an actual change
+                        will_map[v] = code
+                elif v.strip().upper() not in ("E", "U", "N"):
+                    if v not in unrecog:
+                        unrecog.append(v)
+            parts: list[str] = []
+            if will_map:
+                parts.append(
+                    "will normalise: "
+                    + ", ".join(f"'{k}'→{v}" for k, v in list(will_map.items())[:4])
                 )
+            if unrecog:
+                parts.append("⚠ unrecognised (→N): " + ", ".join(unrecog[:3]))
+            if parts:
+                warns[sap_name] = "; ".join(parts)
 
         elif sap_name == "ROO_STATUS":
-            valid = {"q", "m", "f", "qualified", "near-miss", "fail"}
-            bad = [v for v in vals if v.strip().lower() not in valid]
-            if bad:
-                warns[sap_name] = (
-                    f"Expected Q/M/F (Qualified/Near-Miss/Fail) — samples: {', '.join(bad[:3])}"
+            will_map2: dict[str, str] = {}   # deduped
+            unrecog2:  list[str] = []
+            for v in vals:
+                key = v.strip().lower()
+                if key in ROO_STATUS_VALUES:
+                    code = ROO_STATUS_VALUES[key]
+                    if v.strip().upper() != code:
+                        will_map2[v] = code
+                elif v.strip().upper() not in ("Q", "M", "F"):
+                    if v not in unrecog2:
+                        unrecog2.append(v)
+            parts2: list[str] = []
+            if will_map2:
+                parts2.append(
+                    "will normalise: "
+                    + ", ".join(f"'{k}'→{v}" for k, v in list(will_map2.items())[:4])
                 )
+            if unrecog2:
+                parts2.append("⚠ unrecognised (→F): " + ", ".join(unrecog2[:3]))
+            if parts2:
+                warns[sap_name] = "; ".join(parts2)
 
     return warns
