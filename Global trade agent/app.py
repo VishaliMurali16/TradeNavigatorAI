@@ -156,6 +156,27 @@ def _boot_aggregator() -> None:
 
 _boot_aggregator()
 
+
+def _boot_fta_sample() -> None:
+    """Auto-load the sample ERP shipment file so the FTA page has data on startup."""
+    import os
+    sample = os.path.join(os.path.dirname(__file__), "samples", "sample_shipments_erp.csv")
+    if not os.path.exists(sample):
+        return
+    try:
+        with open(sample, "rb") as _f:
+            _data = _f.read()
+        result = fta_data_source.upload_shipment_data(_data, "sample_shipments_erp.csv")
+        if result.get("ok"):
+            _log.info("FTA sample auto-loaded: %s", sample)
+        else:
+            _log.warning("FTA sample auto-load failed: %s", result.get("errors"))
+    except Exception:
+        _log.exception("FTA sample auto-load error")
+
+
+_boot_fta_sample()
+
 # In-memory action log for the control tower workflow
 _action_log: list[dict] = []
 
@@ -1391,6 +1412,103 @@ body {
     margin-bottom: 18px;
 }
 .industry-context-bar strong { color: #A100FF; font-weight: 700; }
+
+/* ── Ticker live bullet ───────────────────────────────────── */
+.ticker-dot {
+    display: inline-block; width: 7px; height: 7px;
+    border-radius: 50%; background: #12B3A3;
+    margin-right: 6px; flex-shrink: 0;
+    animation: tdot-pulse 2.2s ease-in-out infinite;
+}
+@keyframes tdot-pulse {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(18,179,163,0.6); }
+    50%       { opacity: 0.55; box-shadow: 0 0 0 4px rgba(18,179,163,0); }
+}
+
+/* ── Rate-source dialog ───────────────────────────────────── */
+.rs-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(26,5,51,0.55); z-index: 500;
+    align-items: center; justify-content: center;
+}
+.rs-overlay.open { display: flex; }
+.rs-card {
+    background: #fff; border-radius: 14px;
+    padding: 28px 30px; max-width: 440px; width: 90%;
+    box-shadow: 0 12px 48px rgba(26,5,51,0.22);
+    position: relative;
+}
+.rs-close {
+    position: absolute; top: 14px; right: 18px;
+    background: none; border: none; font-size: 1.2rem;
+    color: #888; cursor: pointer; line-height: 1;
+}
+.rs-close:hover { color: #1a0533; }
+.rs-title { font-size: 1rem; font-weight: 700; color: #1a0533; margin-bottom: 4px; }
+.rs-lane  { font-size: 0.78rem; color: #888; margin-bottom: 16px; }
+.rs-rates { display: flex; gap: 20px; margin-bottom: 16px; }
+.rs-rate-box {
+    flex: 1; background: #f9f6ff; border-radius: 8px;
+    padding: 10px 14px; text-align: center;
+}
+.rs-rate-label { font-size: 0.62rem; text-transform: uppercase;
+    letter-spacing: 1px; color: #888; margin-bottom: 4px; }
+.rs-rate-val { font-size: 1.3rem; font-weight: 700; }
+.rs-rate-val.mfn  { color: #c0392b; }
+.rs-rate-val.pref { color: #12B3A3; }
+.rs-honesty {
+    background: rgba(161,0,255,0.05);
+    border: 1px solid rgba(161,0,255,0.18);
+    border-radius: 8px; padding: 10px 14px;
+    font-size: 0.78rem; color: #5a3d7a; line-height: 1.55;
+}
+.rs-honesty-label {
+    font-size: 0.6rem; text-transform: uppercase; letter-spacing: 1.2px;
+    font-weight: 700; color: #A100FF; margin-bottom: 4px;
+}
+.rs-src-badge {
+    display: inline-block; margin-top: 10px;
+    font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.5px; padding: 2px 8px; border-radius: 4px;
+    background: rgba(18,179,163,0.12); color: #0e9080;
+}
+.rate-cell-btn {
+    background: none; border: none; padding: 0; margin: 0;
+    cursor: pointer; font-size: inherit; color: inherit;
+    text-align: left; display: inline-flex; align-items: center; gap: 4px;
+}
+.rate-cell-btn:hover { text-decoration: underline dotted #A100FF; }
+.rate-cell-info { font-size: 0.65rem; color: rgba(161,0,255,0.6); }
+
+/* ── Industry pill (read-only topbar) ────────────────────── */
+a.industry-pill {
+    cursor: pointer;
+    text-decoration: none;
+}
+a.industry-pill:hover {
+    background: rgba(161,0,255,0.30);
+    border-color: #A100FF;
+}
+
+/* ── Settings industry picker ────────────────────────────── */
+.settings-section { margin-bottom: 28px; }
+.settings-section-title {
+    font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 1.5px; color: #A100FF; margin-bottom: 12px;
+}
+.settings-ip-item {
+    display: flex; align-items: flex-start; gap: 12px;
+    padding: 12px 16px;
+    border: 1.5px solid #eee; border-radius: 10px;
+    margin-bottom: 8px; cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+    text-decoration: none; color: #1a0533;
+}
+.settings-ip-item:hover { background: rgba(161,0,255,0.05); border-color: rgba(161,0,255,0.35); }
+.settings-ip-item.active { background: rgba(161,0,255,0.08); border-color: #A100FF; }
+.settings-ip-check { font-size: 1rem; margin-top: 1px; flex-shrink: 0; }
+.settings-ip-name { font-size: 0.87rem; font-weight: 600; }
+.settings-ip-desc { font-size: 0.73rem; color: #888; margin-top: 2px; }
 """
 
 # ---------------------------------------------------------------------------
@@ -1453,18 +1571,9 @@ BASE = """<!DOCTYPE html>
 <!-- ── Workspace top bar ──────────────────────────────────────── -->
 <div class="topbar">
   <div class="industry-pill-wrap">
-    <button class="industry-pill" id="industryBtn" onclick="toggleIndustryPicker()" aria-label="Switch industry lens">
-      🏭 {{ industry.display_name }} ▾
-    </button>
-    <div class="industry-picker" id="industryPicker">
-      <div class="ip-header">Industry Lens</div>
-      {% for ind in all_industries %}
-      <a href="/set-industry?name={{ ind.name }}" class="ip-item {% if ind.name == industry.name %}active{% endif %}">
-        <div class="ip-name">{{ ind.display_name }}</div>
-        <div class="ip-desc">{{ ind.descriptor }}</div>
-      </a>
-      {% endfor %}
-    </div>
+    <a href="/settings#industry" class="industry-pill" title="Change industry lens in Settings" aria-label="Active industry: {{ industry.display_name }}">
+      🏭 {{ industry.display_name }}
+    </a>
   </div>
   <div class="topbar-avatar-wrap">
     <button class="topbar-avatar" id="workspaceBtn" onclick="toggleWorkspaceMenu()" aria-label="Workspace">
@@ -1492,7 +1601,7 @@ BASE = """<!DOCTYPE html>
   </div>
 </main>
 <div class="ticker-wrap" id="tariffTicker">
-  <div class="ticker-label">&#x1F4E1; Live Rates</div>
+  <div class="ticker-label"><span class="ticker-dot" id="tickerDot" aria-hidden="true"></span>Live Rates</div>
   <div class="ticker-track" id="tickerTrack">
     <div class="ticker-inner" id="tickerInner">
       <span style="color:rgba(255,255,255,0.35);font-style:italic;padding-left:16px">Loading tariff intelligence&hellip;</span>
@@ -1500,6 +1609,30 @@ BASE = """<!DOCTYPE html>
   </div>
 </div>
 {{ scripts | safe }}
+
+<!-- ── Rate source dialog ──────────────────────────────────────── -->
+<div class="rs-overlay" id="rsOverlay" onclick="if(event.target===this)closeRsDialog()">
+  <div class="rs-card">
+    <button class="rs-close" onclick="closeRsDialog()" aria-label="Close">&#x2715;</button>
+    <div class="rs-title" id="rsTitle">Rate Source</div>
+    <div class="rs-lane" id="rsLane"></div>
+    <div class="rs-rates">
+      <div class="rs-rate-box">
+        <div class="rs-rate-label">MFN Tariff</div>
+        <div class="rs-rate-val mfn" id="rsMfn">—</div>
+      </div>
+      <div class="rs-rate-box">
+        <div class="rs-rate-label">Preferential</div>
+        <div class="rs-rate-val pref" id="rsPref">—</div>
+      </div>
+    </div>
+    <div class="rs-honesty">
+      <div class="rs-honesty-label">&#x1F50D; Data Honesty</div>
+      <div id="rsHonesty"></div>
+      <div class="rs-src-badge" id="rsBadge"></div>
+    </div>
+  </div>
+</div>
 
 <!-- ── AI Assistant Chat Modal ──────────────────────────────────── -->
 <div class="ai-chat-overlay" id="ai-chat-overlay" onclick="closeAIChatOverlay(event)">
@@ -1580,27 +1713,41 @@ BASE = """<!DOCTYPE html>
     }
   });
 
-  // Industry lens picker
-  function toggleIndustryPicker() {
-    document.getElementById('industryPicker').classList.toggle('open');
+  // Rate source info dialog
+  var _RS_MSG = {
+    'aggregator':         'Both MFN and FTA preferential rates sourced live from the USITC Harmonized Tariff Schedule via a configured connector. Rates reflect today\'s query.',
+    'aggregator_mfn_only':'MFN rate sourced live from the USITC HTS. No FTA preferential rate is available — either no trade agreement covers this origin/destination pair, or the lane is outside connector scope. Savings shown as — (uncomputable without a preferential rate).',
+    'no_aggregator_data': 'No live rate data was returned for this lane. The aggregator connector found no matching schedule entry. Rates are unavailable until a connector is configured for this destination.',
+    'upload':             'MFN and preferential rates come from your uploaded file (columns MFN_RATE / PREF_RATE). These values are not cross-checked against a live tariff schedule.',
+    'pending':            'Rate lookup is in progress. The aggregator is being queried for this lane — refresh to see updated values.'
+  };
+  function openRsDialog(el) {
+    var src  = el.dataset.src  || 'pending';
+    var mfn  = el.dataset.mfn;
+    var pref = el.dataset.pref;
+    var fta  = el.dataset.fta  || '—';
+    var lane = el.dataset.lane || '';
+    document.getElementById('rsTitle').textContent   = 'Rate Data — ' + fta;
+    document.getElementById('rsLane').textContent    = lane;
+    document.getElementById('rsMfn').textContent     = mfn  ? mfn  + '%' : '—';
+    document.getElementById('rsPref').textContent    = pref ? pref + '%' : '—';
+    document.getElementById('rsHonesty').textContent = _RS_MSG[src] || 'Source: ' + src;
+    document.getElementById('rsBadge').textContent   = src.replace(/_/g,' ').toUpperCase();
+    document.getElementById('rsOverlay').classList.add('open');
   }
-  window.toggleIndustryPicker = toggleIndustryPicker;
-  document.addEventListener('click', function(e) {
-    var iBtn = document.getElementById('industryBtn');
-    var iPicker = document.getElementById('industryPicker');
-    if (iBtn && iPicker && !iBtn.contains(e.target) && !iPicker.contains(e.target)) {
-      iPicker.classList.remove('open');
-    }
-  });
+  function closeRsDialog() {
+    document.getElementById('rsOverlay').classList.remove('open');
+  }
+  window.openRsDialog  = openRsDialog;
+  window.closeRsDialog = closeRsDialog;
 
   // ESC key closes all overlays
   document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
       closeAIChat();
+      closeRsDialog();
       var menu = document.getElementById('workspaceMenu');
       if (menu) menu.classList.remove('open');
-      var picker = document.getElementById('industryPicker');
-      if (picker) picker.classList.remove('open');
     }
   });
 
@@ -1667,11 +1814,12 @@ def _current_industry() -> dict:
 
 @app.route("/set-industry")
 def set_industry():
-    """Set the industry lens for this session and redirect back to the referrer."""
+    """Set the industry lens for this session and redirect back."""
     name = request.args.get("name", "")
     if get_industry_profile(name):          # validates against catalog (includes 'all')
         session["industry"] = name
-    return redirect(request.referrer or "/")
+    next_url = request.args.get("next") or request.referrer or "/"
+    return redirect(next_url)
 
 
 # ---------------------------------------------------------------------------
@@ -2089,15 +2237,40 @@ def profile_page():
 @app.route("/settings")
 def settings_page():
     industry = _current_industry()
+    ind_items = ""
+    for ind in get_industries():
+        active_cls = "active" if ind["name"] == industry["name"] else ""
+        check_icon = "&#x2713;" if ind["name"] == industry["name"] else "&nbsp;"
+        ind_items += (
+            f'<a href="/set-industry?name={ind["name"]}&next=/settings%23industry" '
+            f'class="settings-ip-item {active_cls}">'
+            f'<span class="settings-ip-check">{check_icon}</span>'
+            f'<div><div class="settings-ip-name">{ind["display_name"]}</div>'
+            f'<div class="settings-ip-desc">{ind.get("descriptor","")}</div></div>'
+            f'</a>'
+        )
     content = f"""
     <div class="page-shell">
       <div class="page-card">
         <div class="page-title">Settings</div>
         <div class="page-subtitle">Tune how the control tower surfaces advice, tasks, and alerts.</div>
-        <div class="page-grid">
-          <div class="info-card"><div class="label">Alert cadence</div><div class="value">Every 10 min</div></div>
-          <div class="info-card"><div class="label">Auto-escalation</div><div class="value">Enabled</div></div>
-          <div class="info-card"><div class="label">Notifications</div><div class="value">Slack + email</div></div>
+
+        <div class="settings-section" id="industry">
+          <div class="settings-section-title">Industry Lens</div>
+          <p style="font-size:0.8rem;color:#888;margin:0 0 14px">
+            Filters all views to a specific industry. Data shown will only include shipments
+            and rates matching the selected scope.
+          </p>
+          {ind_items}
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title">Alerts &amp; Notifications</div>
+          <div class="page-grid">
+            <div class="info-card"><div class="label">Alert cadence</div><div class="value">Every 10 min</div></div>
+            <div class="info-card"><div class="label">Auto-escalation</div><div class="value">Enabled</div></div>
+            <div class="info-card"><div class="label">Notifications</div><div class="value">Slack + email</div></div>
+          </div>
         </div>
       </div>
     </div>
@@ -2427,7 +2600,7 @@ def agent_fta_preferential():
             )
 
     # Auto-open the panel when there's a message or when already in uploaded mode
-    _panel_open = "open" if (_feedback or not _is_sim) else ""
+    _panel_open = "open" if (_feedback or source["shipment_mode"] == "uploaded") else ""
 
     # ── SAP source badge helper ──────────────────────────────────────────────
     def _sap_badge(label: str) -> str:
@@ -2626,20 +2799,20 @@ def agent_fta_preferential():
         'gap:16px;margin-bottom:28px">'
         f'<div class="kpi-card" style="border-top:3px solid #A100FF">'
         + _kpi_lbl("Utilization Rate", ["PREF_STATUS", "CUSVAL"]) +
-        f'<div class="kpi-value">{kpis["utilization_pct"]}%</div>'
+        f'<div class="kpi-value">{_util_val}</div>'
         f'<div class="kpi-unit">{period_label}</div></div>'
         f'<div class="kpi-card" style="border-top:3px solid #F76C6C">'
         + _kpi_lbl("Unclaimed Opportunity", ["CUSVAL", "MFN_RATE", "PREF_RATE"]) +
-        f'<div class="kpi-value">${kpis["unclaimed_opportunity_m"]}M</div>'
+        f'<div class="kpi-value">{_uncl_val}</div>'
         f'<div class="kpi-unit">Duty savings · {period_label}</div></div>'
         f'<div class="kpi-card" style="border-top:3px solid #A100FF">'
         + _kpi_lbl("Retroactive Claims", ["ENTRY_DATE", "CUSVAL", "MFN_RATE", "PREF_RATE"]) +
-        f'<div class="kpi-value">${kpis["retroactive_claims_k"]}K</div>'
-        f'<div class="kpi-unit">{kpis["retro_window_label"]} · {period_label}</div></div>'
+        f'<div class="kpi-value" style="{_retro_style}">{_retro_val}</div>'
+        f'<div class="kpi-unit">{_retro_unit}{_period_suffix}</div></div>'
         f'<div class="kpi-card" style="border-top:3px solid #F5A623">'
         + _kpi_lbl("CoOs Outstanding", ["POO_STATUS"]) +
-        f'<div class="kpi-value">{kpis["coo_outstanding"]}</div>'
-        f'<div class="kpi-unit">POO_STATUS: Pending + Overdue + Received</div></div>'
+        f'<div class="kpi-value">{_coo_val}</div>'
+        f'<div class="kpi-unit">Pending + Overdue + Received</div></div>'
         '</div>'
     )
 
@@ -2674,26 +2847,39 @@ def agent_fta_preferential():
             f'color:#999;font-size:0.85rem">{_lane_empty}</td></tr>'
         )
     for lane in lanes:
-        util       = lane["UTILIZATION_PCT"]
-        uncl_k     = lane["UNCLAIMED_SAVINGS_K"]
-        sc         = "#c0392b" if uncl_k > 200 else "#1a0533"
-        ctydp_name = _ctry(lane["CTYDP"])
-        ctyar_name = _ctry(lane["CTYAR"])
+        util      = lane["utilization_pct"]
+        uncl_k    = lane["unclaimed_savings_k"]
+        sc        = "#c0392b" if (uncl_k or 0) > 200 else "#1a0533"
+        orig_name = _ctry(lane["origin"])
+        dest_name = _ctry(lane["destination"])
+        mfn_str   = f'{lane["mfn_rate_pct"]}%'          if lane["mfn_rate_pct"]          is not None else "—"
+        pref_str  = f'{lane["preferential_rate_pct"]}%' if lane["preferential_rate_pct"] is not None else "—"
+        uncl_html = f'${uncl_k}K' if uncl_k is not None else '<span style="color:#bbb">—</span>'
+        _rs_mfn   = str(lane["mfn_rate_pct"])          if lane["mfn_rate_pct"]          is not None else ""
+        _rs_pref  = str(lane["preferential_rate_pct"]) if lane["preferential_rate_pct"] is not None else ""
+        _rs_lane  = f'{orig_name} → {dest_name}'
         lane_rows += (
             '<tr style="border-bottom:1px solid #f5f3fa">'
             f'<td style="padding:10px 12px;font-size:0.82rem">'
-            f'{ctydp_name} → {ctyar_name}</td>'
+            f'{orig_name} → {dest_name}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600">'
-            f'{lane["AGREEMENT"]}</td>'
+            f'{lane["fta_name"]}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem">'
-            f'${lane["ELIGIBLE_VALUE_M"]}M</td>'
+            f'${lane["eligible_value_m"]}M</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem">'
-            f'${lane["CLAIMED_VALUE_M"]}M</td>'
+            f'${lane["claimed_value_m"]}M</td>'
             f'<td style="padding:10px 12px;font-size:0.78rem;white-space:nowrap;color:#555">'
-            f'<span style="color:#c0392b;font-weight:600">{lane["MFN_RATE"]}%</span>'
+            f'<button class="rate-cell-btn" '
+            f'data-src="{lane["rates_source"]}" data-mfn="{_rs_mfn}" '
+            f'data-pref="{_rs_pref}" data-fta="{lane["fta_name"]}" '
+            f'data-lane="{_rs_lane}" onclick="openRsDialog(this)" '
+            f'title="Click to see rate source &amp; data honesty">'
+            f'<span style="color:#c0392b;font-weight:600">{mfn_str}</span>'
             f' MFN → '
-            f'<span style="color:#12B3A3;font-weight:600">{lane["PREF_RATE"]}%</span>'
-            f' pref</td>'
+            f'<span style="color:#12B3A3;font-weight:600">{pref_str}</span>'
+            f' pref'
+            f'<span class="rate-cell-info">&#x24D8;</span>'
+            f'</button></td>'
             f'<td style="padding:10px 12px;font-size:0.82rem;white-space:nowrap">'
             f'<div style="background:#e8e0f0;border-radius:3px;height:6px;'
             f'width:80px;display:inline-block">'
@@ -2701,7 +2887,7 @@ def agent_fta_preferential():
             f'width:{util}%"></div></div>'
             f'<span style="margin-left:6px;font-size:0.75rem">{util}%</span></td>'
             f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:{sc}">'
-            f'${uncl_k}K</td>'
+            f'{uncl_html}</td>'
             '</tr>'
         )
 
@@ -2732,7 +2918,7 @@ def agent_fta_preferential():
         "M": "background:#fff3cd;color:#856404",
         "F": "background:#fde8e8;color:#c0392b",
     }
-    unclaimed     = [s for s in shipments if s["PREF_STATUS"] == "U"]
+    unclaimed     = [s for s in shipments if s["claimed_status"] == "U"]
     shipment_rows = ""
     if not unclaimed:
         if _is_empty:
@@ -2746,36 +2932,36 @@ def agent_fta_preferential():
             f'color:#999;font-size:0.85rem">{_shp_empty}</td></tr>'
         )
     for s in unclaimed:
-        roo_code  = s["ROO_STATUS"]
+        roo_code  = s["roo_status"]
         roo_label = ROO_STATUS_LABELS.get(roo_code, roo_code)
         row_bg    = "background:#fff8e6;" if roo_code == "M" else ""
         ro_badge  = roo_badge_styles.get(roo_code, "")
-        tor_id    = s["TOR_ID"]
-        saving_k  = round(s["duty_saving"] / 1000, 1)
-        origin_n  = _ctry(s["CTYDP"])
-        dest_n    = _ctry(s["CTYAR"])
-        entry_d   = _dats_display(s["ENTRY_DATE"])
+        tor_id    = s["shipment_id"]
+        saving_k  = s.get("est_saving_k") or 0.0
+        origin_n  = _ctry(s["origin"])
+        dest_n    = _ctry(s["destination"])
+        entry_d   = _dats_display(s["entry_date"])
         shipment_rows += (
             f'<tr style="{row_bg}cursor:pointer;border-bottom:1px solid #f5f3fa" '
             f"onclick=\"fetchFTAExplain(this, '{tor_id}')\" "
             f'data-shipment-id="{tor_id}" '
-            f'data-product="{s["PRODUCT_TEXT"]}" '
-            f'data-hs-code="{s["CCNGN"]}" '
+            f'data-product="{s["product"]}" '
+            f'data-hs-code="{s["hs_code"]}" '
             f'data-origin="{origin_n}" '
             f'data-destination="{dest_n}" '
-            f'data-fta-name="{s["AGREEMENT"]}" '
-            f'data-value-k="{round(s["CUSVAL"]/1000,1)}" '
+            f'data-fta-name="{s["fta_name"]}" '
+            f'data-value-k="{s["value_k"]}" '
             f'data-eligibility="eligible-unclaimed" '
             f'data-est-saving-k="{saving_k}" '
             f'data-ro-status="{roo_label}" '
-            f'data-rvc-pct="{s["RVC_PCT"]}" '
-            f'data-rvc-threshold="{s["RVC_THRESHOLD"]}">'
+            f'data-rvc-pct="{s["rvc_pct"]}" '
+            f'data-rvc-threshold="{s["roo_threshold_pct"]}">'
             f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600">{tor_id}</td>'
             f'<td style="padding:10px 12px;font-size:0.78rem;color:#666;'
             f'font-family:monospace">{entry_d}</td>'
-            f'<td style="padding:10px 12px;font-size:0.82rem">{s["PRODUCT_TEXT"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem">{s["product"]}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem;font-family:monospace">'
-            f'{s["CCNGN"]}</td>'
+            f'{s["hs_code"]}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem">'
             f'{origin_n} → {dest_n}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;'
@@ -2784,7 +2970,7 @@ def agent_fta_preferential():
             f'<span style="padding:2px 8px;border-radius:4px;font-size:0.72rem;'
             f'font-weight:600;{ro_badge}">{roo_label}</span>'
             f'<div style="font-size:0.65rem;color:#999;margin-top:3px">'
-            f'RVC_PCT {s["RVC_PCT"]}% / {s["RVC_THRESHOLD"]}% req\'d</div></td>'
+            f'RVC {s["rvc_pct"]}% / {s["roo_threshold_pct"]}% req\'d</div></td>'
             f'<td style="padding:10px 12px;font-size:0.78rem;color:#A100FF;'
             f'font-weight:600">▶ Explain</td>'
             '</tr>'
@@ -2835,17 +3021,17 @@ def agent_fta_preferential():
             f'color:#999;font-size:0.85rem">{_coo_empty}</td></tr>'
         )
     for req in coo_requests:
-        poo_s      = req["POO_STATUS"]
-        poo_label  = POO_STATUS_LABELS.get(poo_s, poo_s.title())
-        badge      = coo_badge_styles.get(poo_s, "")
-        lane_disp  = f'{_ctry(req["CTYDP"])} → {_ctry(req["CTYAR"])}'
-        deadline_d = _dats_display(req["VDECL_DEADLINE"])
+        poo_s     = req["status"]
+        poo_label = POO_STATUS_LABELS.get(poo_s, poo_s.title())
+        badge     = coo_badge_styles.get(poo_s, "")
+        lane_disp = f'{_ctry(req["origin"])} → {_ctry(req["destination"])}'
+        deadline_d = _dats_display(req["deadline"])
         coo_rows += (
             '<tr style="border-bottom:1px solid #f5f3fa">'
-            f'<td style="padding:10px 12px;font-size:0.82rem">{req["SUPPLIER_NAME"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem">{req["supplier_name"]}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem">{lane_disp}</td>'
             f'<td style="padding:10px 12px;font-size:0.75rem;color:#555">'
-            f'{req["POO_TYPE"]}</td>'
+            f'{req["poo_type"]}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem;font-family:monospace">'
             f'{deadline_d}</td>'
             f'<td style="padding:10px 12px">'
@@ -2918,7 +3104,7 @@ def agent_fta_preferential():
                 f'color:#999;font-size:0.85rem">{_roo_empty}</td></tr>'
             )
         for p in roo_items:
-            roo_code  = p["ROO_STATUS"]
+            roo_code  = p["roo_status"]
             roo_label = ROO_STATUS_LABELS.get(roo_code, roo_code)
             badge     = roo_badge_styles_assess.get(roo_code, "")
             gap_cell  = (
@@ -2928,12 +3114,12 @@ def agent_fta_preferential():
             )
             roo_rows += (
                 '<tr style="border-bottom:1px solid #f5f3fa">'
-                f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600">{p["PRODUCT_TEXT"]}</td>'
-                f'<td style="padding:10px 12px;font-size:0.78rem;font-family:monospace">{p["CCNGN"]}</td>'
-                f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:#A100FF">{p["AGREEMENT"]}</td>'
+                f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600">{p["product"]}</td>'
+                f'<td style="padding:10px 12px;font-size:0.78rem;font-family:monospace">{p["hs_code"]}</td>'
+                f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:#A100FF">{p["fta_name"]}</td>'
                 f'<td style="padding:10px 12px;font-size:0.78rem;color:#555">{p["roo_test_type"]}</td>'
                 f'<td style="padding:10px 12px;font-size:0.82rem;text-align:center">'
-                f'{p["RVC_PCT"]}% / {p["RVC_THRESHOLD"]}%</td>'
+                f'{p["rvc_pct"]}% / {p["roo_threshold_pct"]}%</td>'
                 f'<td style="padding:10px 12px;text-align:center">'
                 f'<span style="padding:2px 8px;border-radius:4px;font-size:0.72rem;'
                 f'font-weight:600;{badge}">{roo_label}</span></td>'
@@ -2994,17 +3180,18 @@ def agent_fta_preferential():
         )
     for item in roadmap:
         effort_badge = effort_styles.get(item["effort"], "")
-        _rm_sav = item["UNCLAIMED_SAVINGS_K"]
+        _rm_sav = item["unclaimed_savings_k"]
         sc = "#c0392b" if (_rm_sav or 0) > 200 else "#1a0533"
         _rm_sav_html = f'${_rm_sav}K' if _rm_sav is not None else '<span style="color:#bbb">—</span>'
+        _rm_lane_disp = f'{_ctry(item["origin"])} → {_ctry(item["destination"])}'
         roadmap_rows += (
             '<tr style="border-bottom:1px solid #f5f3fa">'
-            f'<td style="padding:10px 12px;font-size:0.82rem">{item["lane_display"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem">{_rm_lane_disp}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:#A100FF">'
-            f'{item["AGREEMENT"]}</td>'
-            f'<td style="padding:10px 12px;font-size:0.82rem">{item["UTILIZATION_PCT"]}%</td>'
+            f'{item["fta_name"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem">{item["utilization_pct"]}%</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:{sc}">'
-            f'${item["UNCLAIMED_SAVINGS_K"]}K</td>'
+            f'{_rm_sav_html}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem">'
             f'<div style="font-weight:600;color:#1a0533">{item["primary_action"]}</div>'
             f'<div style="font-size:0.75rem;color:#888;margin-top:2px">{item["secondary_action"]}</div>'
