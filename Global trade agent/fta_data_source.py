@@ -193,6 +193,133 @@ _FTA_ACTIONS_DEFAULT: tuple[str, str] = (
     "Audit product BOM against applicable FTA rules-of-origin requirements",
 )
 
+# ── Coded-value normalisation ─────────────────────────────────────────────────
+
+def _map_coded_col(
+    df: pd.DataFrame,
+    col: str,
+    value_map: dict,      # lower-cased key → canonical SAP code
+    canonical_set: set,   # already-valid codes — left unchanged
+    fallback: str,        # used in warning text only; applied downstream
+    valid_desc: str,      # human-readable accepted-values description
+) -> "tuple[pd.DataFrame, list[str], list[str]]":
+    """
+    Normalise values in *col* using *value_map*.
+    Values already in *canonical_set* are skipped.
+    Returns (df_copy, info_msgs, warning_msgs).
+
+    info_msgs     — successful translations to report to the user (green/info).
+    warning_msgs  — values that could NOT be mapped; these will hit the downstream
+                    fallback (e.g. 'N' for PREF_STATUS) and affect KPI totals.
+    """
+    df = df.copy()
+    infos:    list[str] = []
+    warnings: list[str] = []
+
+    raw = df[col].dropna().astype(str).str.strip()
+    unique_raw = raw.unique()
+
+    translations: dict[str, str] = {}   # original cell text → canonical code
+    unmapped_vals: list[str] = []
+
+    for v in unique_raw:
+        if v.upper() in canonical_set:
+            continue                          # already a valid SAP code
+        canonical = value_map.get(v.lower())
+        if canonical is not None:
+            translations[v] = canonical
+        else:
+            unmapped_vals.append(v)
+
+    if translations:
+        def _remap(cell):
+            if pd.isna(cell):
+                return cell
+            s = str(cell).strip()
+            return translations.get(s, s)
+        df[col] = df[col].apply(_remap)
+        trans_str = ", ".join(
+            f"'{k}' → {v}" for k, v in sorted(translations.items())
+        )
+        infos.append(f"Normalised {col}: {trans_str}.")
+
+    if unmapped_vals:
+        count = int(
+            df[col].astype(str).str.strip().isin(unmapped_vals).sum()
+        )
+        warnings.append(
+            f"{col}: {count} row(s) with unrecognised value(s) "
+            f"{sorted(unmapped_vals)!r} — accepted {valid_desc}. "
+            f"These rows will default to '{fallback}' and are excluded "
+            f"from eligibility KPIs."
+        )
+
+    return df, infos, warnings
+
+
+def _normalise_coded_values(
+    df: pd.DataFrame,
+) -> "tuple[pd.DataFrame, list[str], list[str]]":
+    """
+    Normalise all coded SAP fields in a shipment DataFrame in-place (copy):
+      PREF_STATUS  E / U / N
+      ROO_STATUS   Q / M / F
+
+    Returns (df_normalised, info_msgs, warning_msgs).
+    """
+    import fta_mapping as _fm   # lazy — avoids any startup circulars
+
+    infos:    list[str] = []
+    warnings: list[str] = []
+
+    if "PREF_STATUS" in df.columns:
+        df, i, w = _map_coded_col(
+            df, "PREF_STATUS",
+            _fm.PREF_STATUS_VALUES, {"E", "U", "N"},
+            fallback="N",
+            valid_desc="E (claimed), U (unclaimed), N (not-eligible)",
+        )
+        infos.extend(i);    warnings.extend(w)
+
+    if "ROO_STATUS" in df.columns:
+        df, i, w = _map_coded_col(
+            df, "ROO_STATUS",
+            _fm.ROO_STATUS_VALUES, {"Q", "M", "F"},
+            fallback="F",
+            valid_desc="Q (qualified), M (near-miss), F (fail)",
+        )
+        infos.extend(i);    warnings.extend(w)
+
+    return df, infos, warnings
+
+
+def _normalise_coo_coded_values(
+    df: pd.DataFrame,
+) -> "tuple[pd.DataFrame, list[str], list[str]]":
+    """
+    Normalise coded SAP fields in a CoO DataFrame in-place (copy):
+      POO_STATUS   PENDING / RECEIVED / OVERDUE / VALIDATED
+
+    Returns (df_normalised, info_msgs, warning_msgs).
+    """
+    import fta_mapping as _fm
+
+    infos:    list[str] = []
+    warnings: list[str] = []
+
+    if "POO_STATUS" in df.columns:
+        df, i, w = _map_coded_col(
+            df, "POO_STATUS",
+            _fm.POO_STATUS_VALUES,
+            {"PENDING", "RECEIVED", "OVERDUE", "VALIDATED"},
+            fallback="PENDING",
+            valid_desc="PENDING, RECEIVED, OVERDUE, VALIDATED",
+        )
+        infos.extend(i);    warnings.extend(w)
+
+    return df, infos, warnings
+
+
 # ── Aggregator enrichment ─────────────────────────────────────────────────────
 
 # Last set of (fta_name, origin, destination) → {mfn_rate_pct, preferential_rate_pct}
@@ -404,14 +531,20 @@ def _validate_shipment(
 
     if "claimed_status" in df.columns:
         valid_ps = {"E", "U", "N"}
-        bad_ps = (
-            set(df["claimed_status"].dropna().str.strip().str.upper().unique()) - valid_ps
-        )
+        bad_ps = set(
+            df["claimed_status"].dropna().astype(str).str.strip().str.upper().unique()
+        ) - valid_ps
         if bad_ps:
+            count_bad = int(
+                (~df["claimed_status"].astype(str).str.strip().str.upper()
+                   .isin(valid_ps) & df["claimed_status"].notna()).sum()
+            )
             warnings.append(
-                f"Unrecognised PREF_STATUS values {bad_ps!r} — "
-                "accepted: E (claimed), U (unclaimed), N (not-eligible). "
-                "Unrecognised values treated as N."
+                f"claimed_status: {count_bad} row(s) have unrecognised "
+                f"values {sorted(bad_ps)!r} — "
+                "accepted E (claimed), U (unclaimed), N (not-eligible). "
+                "These rows are treated as N (not eligible) and excluded "
+                "from eligibility KPIs."
             )
 
     has_roo     = all(c in df.columns for c in SHIPMENT_ROO)
@@ -450,14 +583,19 @@ def _validate_coo(df: pd.DataFrame) -> tuple[bool, list[str], list[str]]:
 
     if "status" in df.columns:
         valid_s = {"PENDING", "RECEIVED", "OVERDUE", "VALIDATED"}
-        bad_s = (
-            set(df["status"].dropna().str.strip().str.upper().unique()) - valid_s
-        )
+        bad_s = set(
+            df["status"].dropna().astype(str).str.strip().str.upper().unique()
+        ) - valid_s
         if bad_s:
+            count_bad = int(
+                (~df["status"].astype(str).str.strip().str.upper()
+                   .isin(valid_s) & df["status"].notna()).sum()
+            )
             warnings.append(
-                f"Unrecognised POO_STATUS values {bad_s!r} — "
-                "accepted: PENDING, RECEIVED, OVERDUE, VALIDATED. "
-                "Unrecognised values treated as PENDING."
+                f"status: {count_bad} row(s) have unrecognised "
+                f"values {sorted(bad_s)!r} — "
+                "accepted PENDING, RECEIVED, OVERDUE, VALIDATED. "
+                "These rows are treated as PENDING."
             )
 
     return len(errors) == 0, errors, warnings
@@ -821,7 +959,9 @@ def upload_coo_data(file_bytes: bytes, filename: str) -> dict:
 
     df = _normalise_cols(raw_df)
     df = _rename_erp_cols(df, _ERP_COO_MAP)   # ERP→snake_case boundary
+    df, norm_infos, norm_warns = _normalise_coo_coded_values(df)
     ok, errors, warnings = _validate_coo(df)
+    warnings = norm_infos + norm_warns + warnings   # prepend normalisation context
 
     if ok:
         with _lock:
@@ -835,6 +975,74 @@ def upload_coo_data(file_bytes: bytes, filename: str) -> dict:
     with _lock:
         _state["upload_coo_msg"] = result
     return result
+
+
+# ── Column-mapping helpers (used by the AJAX upload flow) ────────────────────
+
+def parse_for_mapping(file_bytes: bytes, filename: str):
+    """
+    Parse an uploaded file and return (df, column_list, samples_dict).
+    Columns are normalised (strip/upper) but NOT renamed yet.
+    """
+    import fta_mapping as _fm
+    raw_df  = _parse_file(file_bytes, filename)
+    df      = _normalise_cols(raw_df)
+    columns = list(df.columns)
+    samples = _fm.extract_samples(df)
+    return df, columns, samples
+
+
+def is_native_format(columns: list[str]) -> bool:
+    """
+    True when every column in SHIPMENT_REQUIRED is already present —
+    i.e. the file already uses SAP field names and needs no mapping dialog.
+    """
+    return all(c in columns for c in SHIPMENT_REQUIRED)
+
+
+def apply_mapping_and_load_shipments(
+    df,                         # pandas DataFrame (normalised but not renamed)
+    mapping: dict,              # {SAP_NAME: uploaded_col_or_None, ...}
+) -> dict:
+    """
+    Rename df according to confirmed mapping, validate, derive, store in _state.
+    Returns {"ok": bool, "errors": [...], "warnings": [...]}.
+    """
+    import pandas as pd  # ensure available
+
+    # Build rename dict: uploaded_col -> SAP_NAME
+    rename = {col: sap for sap, col in mapping.items() if col}
+    df_renamed = df.rename(columns=rename)
+    df_renamed  = _normalise_cols(df_renamed)
+
+    # Normalise coded field values BEFORE validation so validators see SAP codes.
+    df_renamed, norm_infos, norm_warns = _normalise_coded_values(df_renamed)
+
+    ok, errors, warnings, has_roo, has_roadmap = _validate_shipment(df_renamed)
+    # Prepend normalisation context so users know what was auto-translated.
+    warnings = norm_infos + norm_warns + warnings
+
+    # We accept the data even when optional sections (RoO, Roadmap) are absent;
+    # _validate_shipment returns ok=False only when required cols are missing.
+    if not ok:
+        result: dict = {"ok": False, "errors": errors, "warnings": warnings}
+        with _lock:
+            _state["upload_shipment_msg"] = result
+        return result
+
+    with _lock:
+        _state.update({
+            "shipment_mode":        "uploaded",
+            "shipment_df":          df_renamed,
+            "shipment_filename":    "(column-mapped upload)",
+            "shipment_has_roo":     has_roo,
+            "shipment_has_roadmap": has_roadmap,
+        })
+        _state["upload_shipment_msg"] = {
+            "ok": True, "errors": [], "warnings": warnings,
+        }
+
+    return {"ok": True, "errors": [], "warnings": warnings}
 
 
 # ── Public API — same signatures as fta_simulator ────────────────────────────
