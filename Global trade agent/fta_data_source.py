@@ -36,11 +36,12 @@ from typing import Any
 
 import pandas as pd
 
-import fta_simulator as _sim
 
 # ── Column specification ──────────────────────────────────────────────────────
 
 # Core — required to render lanes, eligibility feed, and all four KPIs.
+# origin_country / destination_country must be ISO 3166-1 alpha-2 codes (e.g. "KR", "US")
+# so the aggregator can look up real tariff rates for each lane.
 SHIPMENT_REQUIRED: list[str] = [
     "shipment_id",
     "product",
@@ -51,9 +52,11 @@ SHIPMENT_REQUIRED: list[str] = [
     "applicable_fta",
     "claimed_status",    # "claimed" | "unclaimed" | "not-eligible"
     "entry_date",        # ISO date string: YYYY-MM-DD
-    "mfn_rate",          # MFN tariff rate (%)
-    "preferential_rate", # FTA / preferential tariff rate (%)
 ]
+
+# Optional rate columns — accepted for cross-reference but NOT used for derivation.
+# Tariff rates are sourced exclusively from the live aggregator.
+SHIPMENT_RATES: list[str] = ["mfn_rate", "preferential_rate"]
 
 # Optional — enables RoO Compliance Assessment section.
 SHIPMENT_ROO: list[str] = [
@@ -80,22 +83,19 @@ COO_REQUIRED: list[str] = [
 # Rows are representative; column order matches SHIPMENT_REQUIRED then optionals.
 
 SHIPMENT_TEMPLATE_CSV = """\
-shipment_id,product,hs_code,origin_country,destination_country,value,applicable_fta,claimed_status,entry_date,mfn_rate,preferential_rate,regional_value_content_pct,roo_threshold_pct,supplier_name,bom_regional_content
-SHP-T001,Automotive Parts,8708.29,Mexico,USA,245500,USMCA,unclaimed,2026-06-12,7.5,0.0,68,60,Alpha Automotive MX,68% USMCA-origin steel and aluminum
-SHP-T002,Electronic Components,8542.31,Vietnam,EU,312800,EVFTA,unclaimed,2026-07-03,12.0,0.0,72,40,Viet Electronics JSC,72% ASEAN value-added content
-SHP-T003,Cotton Shirts,6105.10,Vietnam,Japan,87600,RCEP,unclaimed,2026-05-20,9.0,2.5,37,40,Hanoi Apparel JSC,37% regional fabric from Vietnamese mills
-SHP-T004,PCB Assemblies,8534.00,Korea,USA,445600,KORUS,claimed,2026-03-14,6.5,0.0,78,45,Seoul Electronics Co,78% Korean-origin components
-SHP-T005,Auto Wiring Harness,8544.30,Mexico,USA,389200,USMCA,claimed,2026-04-08,7.5,0.0,82,60,Alpha Automotive MX,82% North American content
-SHP-T006,Rare Earth Magnets,8505.11,China,USA,234700,N/A,not-eligible,2026-05-05,5.0,5.0,22,40,,22% regional content only — no qualifying FTA
+shipment_id,product,hs_code,origin_country,destination_country,value,applicable_fta,claimed_status,entry_date,regional_value_content_pct,roo_threshold_pct,supplier_name,bom_regional_content
+SMP-001,Aged Cheddar,0406.90,KR,US,180000,KORUS,unclaimed,2026-06-15,72,45,Seoul Dairy Co,72% Korean-origin dairy inputs
+SMP-002,Gouda Cheese Blend,0406.90,KR,US,220000,KORUS,unclaimed,2026-07-01,68,45,Seoul Dairy Co,68% Korean-origin dairy inputs
+SMP-003,Processed Dairy Mix,0406.90,KR,US,95000,KORUS,claimed,2026-05-20,80,45,Busan Foods Ltd,80% Korean-origin dairy
+SMP-004,Laptop Computer,8471.30,VN,US,340000,N/A,unclaimed,2026-06-22,35,40,Hanoi Tech JSC,35% ASEAN value-added content
+SMP-005,Desktop Workstation,8471.30,CN,US,195000,N/A,unclaimed,2026-07-20,28,40,Shenzhen Systems,28% regional content
 """
 
 COO_TEMPLATE_CSV = """\
 supplier,lane,request_date,deadline,status
-Alpha Automotive MX,Mexico → USA,2026-07-01,2026-07-15,overdue
-Viet Textiles JSC,Vietnam → EU,2026-07-05,2026-07-22,pending
-Seoul Electronics Co,Korea → USA,2026-07-10,2026-08-10,pending
-Jakarta Metals PT,Indonesia → Japan,2026-07-08,2026-07-28,received
-Lima Copper SAC,Peru → Canada,2026-07-18,2026-08-18,validated
+Seoul Dairy Co,KR → US,2026-07-05,2026-08-07,overdue
+Busan Foods Ltd,KR → US,2026-07-12,2026-08-12,pending
+Hanoi Tech JSC,VN → US,2026-07-18,2026-08-18,received
 """
 
 # ── Generic qualification actions keyed by FTA name ──────────────────────────
@@ -125,13 +125,133 @@ _FTA_ACTIONS_DEFAULT: tuple[str, str] = (
     "Audit product BOM against applicable FTA rules-of-origin requirements",
 )
 
+# ── Aggregator enrichment ─────────────────────────────────────────────────────
+
+# Last set of (fta_name, origin, destination) → {mfn_rate_pct, preferential_rate_pct}
+# for lanes that received a full update from the aggregator. Written atomically by
+# _enrich_lanes_from_aggregator(); read by get_fta_shipments() to re-derive est_saving_k
+# from the same rates the lane table displays (FIX 1: all derived figures move together).
+# CPython dict assignment is atomic at the bytecode level, so no lock is needed here.
+_enriched_rates: dict = {}
+
+
+def _get_aggregator():
+    """Return app._aggregator at call time, avoiding a circular import at module load."""
+    try:
+        import app as _app          # noqa: PLC0415
+        return getattr(_app, "_aggregator", None)
+    except Exception:
+        return None
+
+
+def _enrich_lanes_from_aggregator(lanes: list[dict]) -> list[dict]:
+    """
+    Overlay real tariff rates from the aggregator onto simulated FTA lanes.
+
+    Each lane carries a ``representative_lane`` dict with ``hs_code``, ``origin``
+    (ISO-3166 alpha-2), and ``destination`` (ISO-3166 alpha-2).  One aggregator
+    query is issued per lane using that representative HS code.
+
+    FIX-2 — full-or-nothing rule (honesty):
+      - aggregator returns CanonicalRate with BOTH mfn_rate and preferential_rate
+        → use both; re-derive all rate-dependent figures; rates_source="aggregator"
+      - aggregator returns CanonicalRate with mfn_rate but preferential_rate=None
+        → show real MFN; mark pref as None (never fabricate a rate);
+           savings cannot be computed; rates_source="aggregator_mfn_only"
+      - aggregator returns None (no connector data for this lane)
+        → both rates stay None; rates_source="no_aggregator_data"
+
+    FIX-3 — representative-rate limitation (honesty):
+      Each lane is queried via a SINGLE representative HS code. For simulator lanes
+      this is curated in fta_simulator.py; for uploaded lanes it is the most-common
+      HS code by shipment count within that lane group (see _derive_lanes()).
+      For lanes spanning multiple HS codes with different MFN rates the returned
+      rate is representative-only, not a weighted average across the full product mix.
+      Do not interpret the enriched lane MFN as exact for every shipment on the lane.
+    """
+    from datetime import date as _date
+    global _enriched_rates
+
+    agg = _get_aggregator()
+    new_enriched: dict = {}
+    result: list[dict] = []
+
+    for lane in lanes:
+        rep    = lane.get("representative_lane", {})
+        hs6    = rep.get("hs_code", "")
+        iso2_o = rep.get("origin", "")
+        iso2_d = rep.get("destination", "")
+
+        lane = dict(lane)   # shallow copy — never mutate the cached simulator list
+
+        if not (hs6 and iso2_o and iso2_d) or agg is None:
+            lane["rates_source"] = "no_aggregator_data"
+            result.append(lane)
+            continue
+
+        try:
+            canonical = agg.query(hs6, iso2_o, iso2_d, _date.today())
+        except Exception:
+            canonical = None
+
+        if canonical is None:
+            lane["rates_source"] = "no_aggregator_data"
+
+        elif canonical.mfn_rate is not None and canonical.preferential_rate is not None:
+            # Full aggregator data — update rates and re-derive ALL rate-dependent figures
+            # from the same updated values so every number on screen reconciles (FIX 1).
+            lane["mfn_rate_pct"]          = canonical.mfn_rate
+            lane["preferential_rate_pct"] = canonical.preferential_rate
+            if canonical.applicable_fta:
+                lane["fta_name"] = canonical.applicable_fta
+
+            elig = lane["eligible_value_m"]
+            clmd = lane["claimed_value_m"]
+            lane["unclaimed_savings_k"] = round(
+                (elig - clmd) * 1000
+                * (lane["mfn_rate_pct"] - lane["preferential_rate_pct"]) / 100,
+                1,
+            )
+            lane["retro_k"] = round(
+                lane["unclaimed_savings_k"] * lane.get("retro_eligible_pct", 0) / 100,
+                1,
+            )
+            lane["rates_source"] = "aggregator"
+
+            # Cache for get_fta_shipments() — keyed by (fta_name, origin, destination)
+            # using the display-format values so the shipment lookup matches directly.
+            new_enriched[(lane["fta_name"], lane["origin"], lane["destination"])] = {
+                "mfn_rate_pct":          lane["mfn_rate_pct"],
+                "preferential_rate_pct": lane["preferential_rate_pct"],
+            }
+
+        elif canonical.mfn_rate is not None:
+            # Partial aggregator data: MFN known, preferential_rate=None.
+            # FIX-2 (simulator-removed context): show the real MFN but mark pref as
+            # unavailable — do not fabricate a preferential rate. Savings cannot be
+            # computed without pref, so unclaimed_savings_k and retro_k stay None.
+            lane["mfn_rate_pct"]          = canonical.mfn_rate
+            lane["preferential_rate_pct"] = None
+            lane["unclaimed_savings_k"]   = None
+            lane["retro_k"]               = None
+            lane["rates_source"]          = "aggregator_mfn_only"
+
+        else:
+            lane["rates_source"] = "no_aggregator_data"
+
+        result.append(lane)
+
+    _enriched_rates = new_enriched   # atomic CPython assignment
+    return result
+
+
 # ── Thread-safe in-memory state ───────────────────────────────────────────────
 
 _lock = threading.Lock()
 _state: dict[str, Any] = {
-    # "simulated" | "uploaded"  — tracked independently per data type
-    "shipment_mode":        "simulated",
-    "coo_mode":             "simulated",
+    # "empty" | "uploaded"  — tracked independently per data type
+    "shipment_mode":        "empty",
+    "coo_mode":             "empty",
     # Normalised pandas DataFrames (None when in simulated mode)
     "shipment_df":          None,
     "coo_df":               None,
@@ -160,10 +280,11 @@ def _ro_status(rvc: float, threshold: float) -> str:
 def _parse_file(file_bytes: bytes, filename: str) -> pd.DataFrame:
     """Deserialise CSV or XLSX bytes into a DataFrame.  Raises ValueError on bad format."""
     fn = filename.lower()
+    _hs_str = {"hs_code": str}  # preserve leading zeros (e.g. 0406.90 must not become 406.9)
     if fn.endswith(".csv"):
-        return pd.read_csv(io.BytesIO(file_bytes))
+        return pd.read_csv(io.BytesIO(file_bytes), dtype=_hs_str)
     if fn.endswith((".xlsx", ".xls")):
-        return pd.read_excel(io.BytesIO(file_bytes))
+        return pd.read_excel(io.BytesIO(file_bytes), dtype=_hs_str)
     raise ValueError(f"Unsupported file type '{filename}'. Upload a .csv or .xlsx file.")
 
 
@@ -263,13 +384,10 @@ def _derive_shipments(df: pd.DataFrame, has_roo: bool) -> list[dict]:
 
         value_usd = float(row.get("value", 0) or 0)
         value_k   = round(value_usd / 1_000, 1)
-        mfn       = float(row.get("mfn_rate", 0) or 0)
-        pref      = float(row.get("preferential_rate", 0) or 0)
 
-        est_saving_k = (
-            round(max(0.0, value_k * (mfn - pref) / 100), 1)
-            if eligibility == "eligible-unclaimed" else 0.0
-        )
+        # est_saving_k is re-derived from aggregator rates in get_fta_shipments()
+        # after lane enrichment. None here means "rate not yet available".
+        est_saving_k = None
 
         if has_roo:
             rvc_raw = row.get("regional_value_content_pct")
@@ -314,13 +432,9 @@ def _derive_lanes(df: pd.DataFrame) -> list[dict]:
     Lane key: (applicable_fta, origin_country, destination_country).
     not-eligible shipments are excluded from eligible/claimed totals.
 
-    Unclaimed savings are computed at shipment level and summed — so the KPI
-    "Unclaimed Opportunity" is always consistent with the sum over the lane table,
-    which is consistent with the shipment feed.
-
-    Derivation formula (identical to fta_simulator):
-        unclaimed_savings_k = Σ (value_k × (mfn_rate − preferential_rate) / 100)
-                              over unclaimed shipments in the lane.
+    Rates (mfn_rate_pct, preferential_rate_pct, unclaimed_savings_k, retro_k) are
+    set to None here and populated by _enrich_lanes_from_aggregator() after this
+    function returns. Sorting also happens in get_fta_lanes() after enrichment.
     """
     eligible_df = df[
         df["claimed_status"].str.strip().str.lower().isin(["claimed", "unclaimed"])
@@ -337,26 +451,17 @@ def _derive_lanes(df: pd.DataFrame) -> list[dict]:
         claimed_val = grp.loc[
             grp["claimed_status"].str.strip().str.lower() == "claimed", "value"
         ].sum()
-        uncl_grp = grp[grp["claimed_status"].str.strip().str.lower() == "unclaimed"]
-
-        # Weighted-average tariff rates across all eligible shipments in the lane
-        if total_val > 0:
-            wt_mfn  = (grp["value"] * grp["mfn_rate"]).sum()  / total_val
-            wt_pref = (grp["value"] * grp["preferential_rate"]).sum() / total_val
-        else:
-            wt_mfn = wt_pref = 0.0
-
-        # Unclaimed savings: shipment-level formula summed over unclaimed rows
-        unclaimed_k = round(
-            (
-                uncl_grp["value"] / 1_000
-                * (uncl_grp["mfn_rate"] - uncl_grp["preferential_rate"])
-                / 100
-            ).sum(),
-            1,
-        )
 
         util_pct = round(claimed_val / total_val * 100, 1) if total_val else 0.0
+
+        # Representative HS for aggregator query: most-common HS code by shipment count
+        # on this lane. FIX-3: single-HS limitation — if the lane spans multiple HS codes
+        # with different MFN rates, the returned rate is representative-only.
+        rep_hs = ""
+        if "hs_code" in grp.columns:
+            hs_counts = grp["hs_code"].dropna().value_counts()
+            if not hs_counts.empty:
+                rep_hs = str(hs_counts.index[0]).replace(".", "").replace(" ", "")[:6]
 
         lanes.append({
             "lane_id":               f"UL-{counter:03d}",
@@ -365,16 +470,21 @@ def _derive_lanes(df: pd.DataFrame) -> list[dict]:
             "fta_name":              str(fta),
             "eligible_value_m":      round(total_val   / 1_000_000, 3),
             "claimed_value_m":       round(claimed_val / 1_000_000, 3),
-            "mfn_rate_pct":          round(wt_mfn,  2),
-            "preferential_rate_pct": round(wt_pref, 2),
+            "mfn_rate_pct":          None,    # populated by _enrich_lanes_from_aggregator
+            "preferential_rate_pct": None,    # populated by _enrich_lanes_from_aggregator
             "utilization_pct":       util_pct,
-            "unclaimed_savings_k":   unclaimed_k,
-            "retro_eligible_pct":    0,    # not derivable from shipment-level data
-            "retro_k":               0.0,
+            "unclaimed_savings_k":   None,    # populated by _enrich_lanes_from_aggregator
+            "retro_eligible_pct":    0,        # not derivable from upload
+            "retro_k":               None,    # populated by _enrich_lanes_from_aggregator
+            "rates_source":          "pending",
+            "representative_lane":   {
+                "hs_code":     rep_hs,
+                "origin":      str(origin),
+                "destination": str(dest),
+            },
         })
         counter += 1
 
-    lanes.sort(key=lambda x: x["unclaimed_savings_k"], reverse=True)
     return lanes
 
 
@@ -490,7 +600,7 @@ def _derive_qualification_roadmap(
             "timeline":            timeline,
         })
 
-    roadmap.sort(key=lambda x: x["unclaimed_savings_k"], reverse=True)
+    roadmap.sort(key=lambda x: (x["unclaimed_savings_k"] or 0), reverse=True)
     return roadmap
 
 
@@ -536,12 +646,12 @@ def take_upload_messages() -> tuple[dict | None, dict | None]:
     return s_msg, c_msg
 
 
-def reset_to_simulated() -> None:
-    """Reset both data types back to simulated mode."""
+def reset_to_empty() -> None:
+    """Clear all uploads and return to the empty (no-data) state."""
     with _lock:
         _state.update({
-            "shipment_mode":        "simulated",
-            "coo_mode":             "simulated",
+            "shipment_mode":        "empty",
+            "coo_mode":             "empty",
             "shipment_df":          None,
             "coo_df":               None,
             "shipment_filename":    None,
@@ -622,8 +732,12 @@ def get_fta_lanes() -> list:
         mode = _state["shipment_mode"]
         df   = _state["shipment_df"]
     if mode != "uploaded":
-        return _sim.get_fta_lanes()          # ← simulated (or future: erp)
-    return _derive_lanes(df)
+        return []
+    lanes = _derive_lanes(df)
+    enriched = _enrich_lanes_from_aggregator(lanes)
+    # Sort after enrichment so ordering reflects real savings (None lanes sort last)
+    enriched.sort(key=lambda x: (x["unclaimed_savings_k"] or 0), reverse=True)
+    return enriched
 
 
 def get_fta_shipments() -> list:
@@ -632,8 +746,28 @@ def get_fta_shipments() -> list:
         df      = _state["shipment_df"]
         has_roo = _state["shipment_has_roo"]
     if mode != "uploaded":
-        return _sim.get_fta_shipments()
-    return _derive_shipments(df, has_roo)
+        return []
+
+    shipments = _derive_shipments(df, has_roo)
+
+    # Re-derive est_saving_k from aggregator rates (FIX 1: all rate-derived figures
+    # move together). _enriched_rates is populated by get_fta_lanes(); it only
+    # contains lanes where the aggregator supplied both MFN and pref rates.
+    rates = _enriched_rates
+    if not rates:
+        return shipments
+
+    result = []
+    for s in shipments:
+        key      = (s["fta_name"], s["origin"], s["destination"])
+        enriched = rates.get(key)
+        if enriched and s["eligibility"] == "eligible-unclaimed":
+            s    = dict(s)
+            mfn  = enriched["mfn_rate_pct"]
+            pref = enriched["preferential_rate_pct"]
+            s["est_saving_k"] = round(max(0.0, s["value_k"] * (mfn - pref) / 100), 1)
+        result.append(s)
+    return result
 
 
 def get_coo_requests() -> list:
@@ -641,7 +775,7 @@ def get_coo_requests() -> list:
         mode = _state["coo_mode"]
         df   = _state["coo_df"]
     if mode != "uploaded":
-        return _sim.get_coo_requests()
+        return []
 
     status_norm = {"pending": "pending", "received": "received",
                    "overdue": "overdue",  "validated": "validated"}
@@ -661,12 +795,13 @@ def get_coo_requests() -> list:
 def get_fta_kpis() -> dict:
     """
     All four KPIs derived from the same lanes + CoO data the tables display.
-    Guaranteed consistent regardless of source mode — no independent figures.
 
-    Formula (identical to fta_simulator.get_fta_kpis):
+    Formula:
         Utilization Rate  = Σ claimed_value_m / Σ eligible_value_m
-        Unclaimed Oppty   = Σ lane.unclaimed_savings_k / 1000  (→ $M)
-        Retroactive Claims= Σ lane.retro_k  (0 for uploaded — not in schema)
+        Unclaimed Oppty   = Σ lane.unclaimed_savings_k (aggregator-covered lanes only)
+        Retroactive Claims= None — retro eligibility is not in the upload schema;
+                            rendering None as "Not available" (FIX A) is honest;
+                            showing 0 would falsely imply "checked and found none"
         CoOs Outstanding  = count of coo where status ∈ {pending,overdue,received}
     """
     with _lock:
@@ -674,16 +809,27 @@ def get_fta_kpis() -> dict:
         df     = _state["shipment_df"]
 
     if s_mode != "uploaded":
-        return _sim.get_fta_kpis()
+        return {
+            "empty":                    True,
+            "utilization_pct":          None,
+            "unclaimed_opportunity_m":  None,
+            "retroactive_claims_k":     None,
+            "coo_outstanding":          None,
+            "period_label":             "—",
+            "retro_window_label":       "Not available",
+        }
 
     lanes = get_fta_lanes()
     coos  = get_coo_requests()
 
-    total_eligible_m  = sum(l["eligible_value_m"]   for l in lanes)
-    total_claimed_m   = sum(l["claimed_value_m"]     for l in lanes)
-    total_unclaimed_k = sum(l["unclaimed_savings_k"] for l in lanes)
-    coo_outstanding   = sum(1 for c in coos
-                            if c["status"] in ("pending", "overdue", "received"))
+    total_eligible_m  = sum(l["eligible_value_m"] for l in lanes)
+    total_claimed_m   = sum(l["claimed_value_m"]  for l in lanes)
+    # Only sum lanes where aggregator supplied both rates (unclaimed_savings_k is not None)
+    total_unclaimed_k = sum(
+        l["unclaimed_savings_k"] for l in lanes
+        if l["unclaimed_savings_k"] is not None
+    )
+    coo_outstanding = sum(1 for c in coos if c["status"] in ("pending", "overdue", "received"))
 
     util_pct = (
         round(total_claimed_m / total_eligible_m * 100, 1)
@@ -691,12 +837,12 @@ def get_fta_kpis() -> dict:
     )
 
     return {
-        "utilization_pct":         util_pct,
+        "utilization_pct":          util_pct,
         "unclaimed_opportunity_m":  round(total_unclaimed_k / 1_000, 2),
-        "retroactive_claims_k":    0.0,   # retro eligibility not in upload schema
-        "coo_outstanding":         coo_outstanding,
-        "period_label":            _derive_period_label(df) if df is not None else "Uploaded data",
-        "retro_window_label":      "Not available from upload",
+        "retroactive_claims_k":     None,   # FIX A: uncomputable from upload, not zero
+        "coo_outstanding":          coo_outstanding,
+        "period_label":             _derive_period_label(df) if df is not None else "Uploaded data",
+        "retro_window_label":       "Not available from upload",
     }
 
 
@@ -714,7 +860,7 @@ def get_roo_assessments():
                    if df is not None and c not in df.columns]
 
     if mode != "uploaded":
-        return _sim.get_roo_assessments()
+        return {"unavailable": True, "reason": "no_upload"}
 
     if not has_roo:
         return {
@@ -732,7 +878,7 @@ def get_qualification_roadmap() -> list:
         has_roadmap = _state["shipment_has_roadmap"]
 
     if mode != "uploaded":
-        return _sim.get_qualification_roadmap()
+        return []
 
     lanes = get_fta_lanes()
     return _derive_qualification_roadmap(

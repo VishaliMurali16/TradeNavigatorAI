@@ -12,7 +12,8 @@ from dotenv import load_dotenv
 from air import AsyncAIRefinery
 
 from agents_registry import AGENTS, CLUSTERS, get_agent, agents_by_cluster
-from data_simulator import get_kpis, get_alerts, get_tariff_sources, get_tariff_feed
+from aggregator.feed_adapter import to_feed_entry as _agg_to_feed_entry
+from data_simulator import get_kpis, get_tariff_sources, get_tariff_feed
 from industry_catalog import get_industries, get_industry_profile, default_industry, classify_shipment
 import fta_data_source
 from fta_data_source import SHIPMENT_TEMPLATE_CSV, COO_TEMPLATE_CSV
@@ -321,40 +322,129 @@ def api_posture_summary():
 
 @app.route("/api/tariff-feed")
 def api_tariff_feed():
-    """Return live tariff events and source monitoring data.
+    """Return live tariff events and source monitoring data, filtered by active industry.
 
-    Serves real CanonicalRates from the aggregator store when enabled and
-    non-empty; falls back to the simulator on any error or empty store so
-    the UI is never broken.
+    Routing rules:
+      - specific industry + aggregator has matching lanes → filtered real feed
+      - specific industry + 0 matching lanes OR aggregator down  → no_industry_coverage
+        response with empty feed; never falls back to simulator for specific industries
+        (simulator headlines are not HS-scoped so they would mislead under an industry label)
+      - "all" + aggregator empty/down → system-health simulator fallback (unchanged)
+
+    active_industry is an intentional part of the API response: it exposes the active
+    scope to integrators and the ticker JS for empty-state rendering.
     """
+    industry  = _current_industry()
+    is_all    = industry.get("name") == "all"
+    ind_name  = industry.get("name", "all")
+    ind_label = industry.get("display_name", ind_name)
+
+    def _no_coverage():
+        return jsonify({
+            "sources":               get_tariff_sources(),
+            "feed":                  [],
+            "active_industry":       ind_name,
+            "industry_display_name": ind_label,
+            "no_industry_coverage":  True,
+        })
+
     if _aggregator is not None:
         try:
-            feed = _aggregator.recent_feed(_agg_max_entries)
+            raw = _aggregator.recent_raw(_agg_max_entries)
+            if not is_all:
+                raw = [r for r in raw
+                       if classify_shipment({"hs_code": r.hs6}, industry)]
+            feed = [_agg_to_feed_entry(r) for r in raw]
             if feed:
-                return jsonify({"sources": get_tariff_sources(), "feed": feed})
+                return jsonify({
+                    "sources":         get_tariff_sources(),
+                    "feed":            feed,
+                    "active_industry": ind_name,
+                })
+            if not is_all:
+                # Aggregator running but 0 lanes match this industry → clean empty state
+                return _no_coverage()
+            # is_all + empty aggregator → fall through to system-health simulator
         except Exception:
-            _log.exception("Aggregator feed path failed — falling back to simulator")
-    return jsonify({"sources": get_tariff_sources(), "feed": get_tariff_feed()})
+            _log.exception("Aggregator feed path failed")
+            if not is_all:
+                return _no_coverage()
+            # is_all + exception → fall through to system-health simulator
+
+    if not is_all:
+        # Aggregator not configured; still no simulator for specific industries
+        return _no_coverage()
+
+    # "all" + aggregator empty/down → system-health simulator fallback (unchanged behaviour)
+    return jsonify({
+        "sources":         get_tariff_sources(),
+        "feed":            get_tariff_feed(),
+        "active_industry": "all",
+    })
 
 
 @app.route("/api/tariff-shock")
 def api_tariff_shock():
-    """Return exposure reports and alerts from the TariffShockAgent.
+    """Return exposure reports and alerts from the TariffShockAgent, filtered by active industry.
 
-    When the agent is disabled or not yet initialised, returns an empty payload
-    so the tab can render its inactive placeholder without errors.
+    Filtering:
+      - Reports (dict keyed by lane_key): filter on the structured hs6 field in each report.
+      - Alerts: filter on the structured hs6 field added by alert_adapter.to_alert().
+      - "all" → no filter, current behaviour unchanged.
+      - Specific industry + 0 matching alerts AND 0 matching reports → no_industry_coverage.
+        This mirrors /api/tariff-feed: never show all-industry data under an industry label.
+
+    active_industry is an intentional API field exposing the active scope.
+    All honesty flags (stub_label, review_flag, remedy_applicability, illustrative note
+    in message text) are set before filtering and pass through unchanged.
     """
+    industry  = _current_industry()
+    is_all    = industry.get("name") == "all"
+    ind_name  = industry.get("name", "all")
+    ind_label = industry.get("display_name", ind_name)
+
     if _tariff_shock_agent is None:
-        return jsonify({"enabled": False, "alerts": [], "reports": {}})
-    try:
         return jsonify({
-            "enabled": True,
-            "alerts":  _tariff_shock_agent.latest_alerts(10),
-            "reports": _tariff_shock_agent.latest_report(),
+            "enabled":         False,
+            "alerts":          [],
+            "reports":         {},
+            "active_industry": ind_name,
+        })
+
+    try:
+        alerts  = _tariff_shock_agent.latest_alerts(10)
+        reports = _tariff_shock_agent.latest_report()
+
+        if not is_all:
+            alerts  = [a for a in alerts
+                       if classify_shipment({"hs_code": a.get("hs6", "")}, industry)]
+            reports = {k: v for k, v in reports.items()
+                       if classify_shipment({"hs_code": v.get("hs6", "")}, industry)}
+            if not alerts and not reports:
+                return jsonify({
+                    "enabled":               True,
+                    "alerts":                [],
+                    "reports":               {},
+                    "active_industry":       ind_name,
+                    "industry_display_name": ind_label,
+                    "no_industry_coverage":  True,
+                })
+
+        return jsonify({
+            "enabled":         True,
+            "alerts":          alerts,
+            "reports":         reports,
+            "active_industry": ind_name,
         })
     except Exception:
         _log.exception("TariffShockAgent feed path failed")
-        return jsonify({"enabled": True, "alerts": [], "reports": {}, "error": "fetch failed"})
+        return jsonify({
+            "enabled":         True,
+            "alerts":          [],
+            "reports":         {},
+            "error":           "fetch failed",
+            "active_industry": ind_name,
+        })
 
 
 @app.route("/api/action-log", methods=["GET", "POST"])
@@ -552,29 +642,13 @@ body {
 .main-content {
     flex: 1 1 auto;
     min-width: 0;
-    padding: 28px 32px 32px;
+    padding: 28px 32px 52px;
     overflow-y: auto;
     overflow-x: hidden;
     display: flex;
     flex-direction: column;
     gap: 20px;
     scrollbar-gutter: stable;
-}
-.main-right-pane {
-    flex: 0 0 360px;
-    width: 360px;
-    max-width: 360px;
-    min-width: 360px;
-    background: rgba(255,255,255,0.88);
-    backdrop-filter: blur(10px);
-    border-left: 1px solid rgba(26,5,51,0.08);
-    overflow-y: auto;
-    overflow-x: hidden;
-    display: flex;
-    flex-direction: column;
-    box-shadow: -8px 0 24px rgba(26,5,51,0.04);
-    scrollbar-gutter: stable;
-    flex-shrink: 0;
 }
 
 /* ── Right tariff pane ───────────────────────────────────────── */
@@ -953,25 +1027,86 @@ body {
     font-size: 0.72rem; color: #b2a8c8; text-align: right;
 }
 
-@media (max-width: 520px) {
-    .main { flex-direction: column; }
-    .main-right-pane {
-        flex: 0 0 auto;
-        width: 100%;
-        max-width: none;
-        min-width: 0;
-        border-left: 0;
-        border-top: 1px solid rgba(26,5,51,0.08);
-        max-height: 420px;
-    }
-}
-
 @media (max-width: 760px) {
     .sidebar { position: static; width: 100%; min-height: auto; max-height: none; }
     .main { margin-left: 0; flex-direction: column; }
-    .main-content { padding: 20px; }
+    .main-content { padding: 20px 16px 52px; }
     .page-header { flex-direction: column; align-items: flex-start; }
 }
+
+/* ── Bottom tariff ticker ─────────────────────────────────────── */
+:root { --sidebar-w: 260px; }
+@media (max-width: 760px) { :root { --sidebar-w: 0px; } }
+.ticker-wrap {
+    position: fixed;
+    bottom: 0;
+    left: var(--sidebar-w);
+    right: 0;
+    height: 36px;
+    background: #12062a;
+    border-top: 1px solid rgba(161,0,255,0.3);
+    z-index: 108;
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+    font-size: 0.72rem;
+    color: rgba(255,255,255,0.85);
+    user-select: none;
+}
+.ticker-label {
+    flex-shrink: 0;
+    padding: 0 12px;
+    font-size: 0.58rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: #A100FF;
+    border-right: 1px solid rgba(161,0,255,0.3);
+    height: 100%;
+    display: flex;
+    align-items: center;
+    background: #0e0422;
+    white-space: nowrap;
+}
+.ticker-track {
+    flex: 1;
+    overflow: hidden;
+    height: 100%;
+    position: relative;
+}
+.ticker-inner {
+    display: inline-flex;
+    align-items: center;
+    white-space: nowrap;
+    height: 100%;
+    animation: ticker-scroll 60s linear infinite;
+    will-change: transform;
+}
+.ticker-wrap:hover .ticker-inner { animation-play-state: paused; }
+@keyframes ticker-scroll {
+    0%   { transform: translateX(calc(100vw - var(--sidebar-w))); }
+    100% { transform: translateX(-100%); }
+}
+.ticker-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-right: 32px;
+}
+.tick-badge {
+    font-size: 0.58rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    flex-shrink: 0;
+}
+.tick-cleared { background: rgba(18,179,163,0.22);  color: #12B3A3; }
+.tick-issued  { background: rgba(247,108,108,0.22); color: #F76C6C; }
+.tick-pending { background: rgba(245,166,35,0.22);  color: #F5A623; }
+.ticker-src { color: rgba(255,255,255,0.38); font-style: normal; }
+.ticker-sep { color: rgba(161,0,255,0.4); margin: 0 10px; }
 
 /* ── AI Chat Widget ──────────────────────────────────────────────── */
 .ai-chat-trigger {
@@ -1353,28 +1488,15 @@ BASE = """<!DOCTYPE html>
     {{ content | safe }}
     <div class="footer">TradeNavigator AI &mdash; Accenture &copy; 2025</div>
   </div>
-  <div class="main-right-pane" id="tariff-pane">
-    <div class="tariff-pane-header">
-      <div class="tariff-pane-title">📊 Tariff Intelligence</div>
-      <div class="tariff-pane-subtitle">Live aggregation by AI agent</div>
-    </div>
-    
-    <div class="sources-monitor" id="sources-container">
-      <div class="sources-title">Source Monitoring</div>
-    </div>
-    
-    <div class="tariff-feed" id="tariff-feed-container">
-      <div class="feed-section-label">Recent Feed</div>
-    </div>
-    
-    <div class="tariff-pane-footer">
-      <div class="aggregator-badge">
-        <span class="pulse-dot"></span>
-        Aggregator Active
-      </div>
+</main>
+<div class="ticker-wrap" id="tariffTicker">
+  <div class="ticker-label">&#x1F4E1; Live Rates</div>
+  <div class="ticker-track" id="tickerTrack">
+    <div class="ticker-inner" id="tickerInner">
+      <span style="color:rgba(255,255,255,0.35);font-style:italic;padding-left:16px">Loading tariff intelligence&hellip;</span>
     </div>
   </div>
-</main>
+</div>
 {{ scripts | safe }}
 
 <!-- ── AI Assistant Chat Modal ──────────────────────────────────── -->
@@ -1479,6 +1601,52 @@ BASE = """<!DOCTYPE html>
       if (picker) picker.classList.remove('open');
     }
   });
+
+  // Bottom tariff ticker — polls /api/tariff-feed every 10s
+  var _tickerCache = '';
+  function loadTicker() {
+    fetch('/api/tariff-feed', {credentials: 'same-origin'})
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var inner = document.getElementById('tickerInner');
+        var track = document.getElementById('tickerTrack');
+        if (!inner) return;
+        // Specific industry with no aggregator coverage → static notice, no scroll
+        if (data.no_industry_coverage) {
+          var lbl = data.industry_display_name || data.active_industry || 'this industry';
+          var html = '<span style="color:rgba(255,255,255,0.45);font-style:italic;padding-left:16px">'
+            + '— No live rate updates for ' + lbl + ' yet — coverage expanding.'
+            + '</span>';
+          if (html === _tickerCache) return;
+          _tickerCache = html;
+          inner.innerHTML = html;
+          inner.style.animation = 'none';
+          return;
+        }
+        if (!data.feed || !data.feed.length) return;
+        var html = '';
+        data.feed.forEach(function(ev) {
+          html += '<span class="ticker-item">'
+            + '<span class="tick-badge tick-' + ev.status + '">' + ev.status.toUpperCase() + '</span>'
+            + ' ' + ev.headline
+            + ' <span class="ticker-src">via ' + ev.source + '</span>'
+            + '</span><span class="ticker-sep" aria-hidden="true">·</span>';
+        });
+        if (html === _tickerCache) return;
+        _tickerCache = html;
+        inner.innerHTML = html;
+        // Set duration for ~55 px/s regardless of content length
+        var trackW = track ? track.offsetWidth : Math.max(0, window.innerWidth - 260);
+        var innerW = inner.scrollWidth;
+        var dur = Math.round((trackW + innerW) / 55);
+        inner.style.animation = 'none';
+        inner.offsetWidth; // force reflow to restart
+        inner.style.animation = 'ticker-scroll ' + dur + 's linear infinite';
+      })
+      .catch(function() {});
+  }
+  loadTicker();
+  setInterval(loadTicker, 10000);
 })();
 </script>
 
@@ -1510,11 +1678,13 @@ def set_industry():
 
 @app.route("/")
 def control_tower():
-    industry = _current_industry()
-    kpis   = get_kpis()
-    alerts = get_alerts()
+    industry  = _current_industry()
+    is_all    = industry.get("name") == "all"
+    ind_label = industry.get("display_name", industry.get("name", "all"))
+    kpis      = get_kpis()
 
-    kpi_html = f"""
+    if is_all:
+        kpi_html = f"""
     <div class="kpi-strip">
       <div class="kpi-card">
         <div class="kpi-label">Total Duty Paid</div>
@@ -1548,20 +1718,18 @@ def control_tower():
       </div>
     </div>
     """
-
-    ai_html = ""
-
-    alert_rows = ""
-    for al in alerts:
-        sev = al["severity"]
-        alert_rows += f"""
-        <div class="alert-row">
-          <div class="sev-dot sev-{sev}"></div>
-          <div class="alert-msg">{al['message']}</div>
-          <div class="alert-ts">{al['timestamp']}</div>
-        </div>"""
-
-    alerts_html = ""
+    else:
+        kpi_html = (
+            '<div class="kpi-strip">'
+            '<div class="kpi-card" style="grid-column:1/-1;display:flex;flex-direction:column;'
+            'justify-content:center;align-items:center;text-align:center;'
+            'min-height:110px;border-top-color:#bbb;">'
+            f'<div class="kpi-label" style="font-size:0.75rem">Portfolio KPIs &mdash; {ind_label}</div>'
+            '<div class="kpi-value" style="font-size:1rem;color:#aaa;font-weight:500;margin:10px 0 4px;">'
+            'Industry-specific KPIs require client data (ERP integration)</div>'
+            '<div class="kpi-unit">Switch to <strong>All Industries</strong> to see aggregated portfolio totals</div>'
+            '</div></div>'
+        )
 
     cluster_tiles = ""
 
@@ -1657,6 +1825,18 @@ def control_tower():
         <tbody>{log_rows}</tbody>
       </table>
     </div>
+    <details style="border-radius:10px;box-shadow:0 2px 8px rgba(26,5,51,0.07);background:#fff;overflow:hidden;margin-top:4px">
+      <summary style="padding:14px 20px;font-size:0.78rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;border-bottom:1px solid #f0eaf8;display:flex;align-items:center;gap:8px;cursor:pointer;list-style:none;-webkit-user-select:none;user-select:none;color:#1a0533">
+        &#x1F4E1;&nbsp;Aggregator Data Sources
+        <span style="margin-left:auto;font-size:0.7rem;font-weight:400;color:#A100FF;text-transform:none;letter-spacing:0">&#9660; expand</span>
+      </summary>
+      <div class="sources-monitor" id="sources-container">
+        <div class="sources-title">Source Monitoring</div>
+      </div>
+      <div style="padding:8px 16px 10px;font-size:0.68rem;color:#aaa;border-top:1px solid #f0eaf8">
+        <span class="aggregator-badge"><span class="pulse-dot"></span> Aggregator Active</span>
+      </div>
+    </details>
     <div class="todo-modal" id="todo-modal" aria-hidden="true">
       <div class="todo-modal-card">
         <div class="todo-modal-title">Mark task complete</div>
@@ -2070,7 +2250,7 @@ def fta_upload_coo():
 
 @app.route("/api/fta/reset", methods=["POST"])
 def fta_reset():
-    fta_data_source.reset_to_simulated()
+    fta_data_source.reset_to_empty()
     return redirect(url_for("agent_fta_preferential"))
 
 
@@ -2096,6 +2276,7 @@ def fta_template(which):
 
 @app.route("/agent/fta_preferential")
 def agent_fta_preferential():
+    industry = _current_industry()
     kpis         = fta_data_source.get_fta_kpis()
     lanes        = fta_data_source.get_fta_lanes()
     shipments    = fta_data_source.get_fta_shipments()
@@ -2105,18 +2286,87 @@ def agent_fta_preferential():
     source       = fta_data_source.get_source_info()
     s_msg, c_msg = fta_data_source.take_upload_messages()
 
+    # ── Industry filtering ──────────────────────────────────────────────────
+    # Apply BEFORE HTML rendering so KPIs, tables, and empty states all reflect
+    # the same filtered view. "all" → no filter (current behavior unchanged).
+    # Filtering selects which rows surface; row content (honesty flags) is never modified.
+    is_all    = industry.get("name") == "all"
+    ind_label = industry.get("display_name", industry.get("name", "All Industries"))
+    _is_empty = (source["shipment_mode"] == "empty")   # also re-set in header section below
+    _no_industry_match = False   # distinct from _is_empty: data uploaded, none in this industry
+
+    if not is_all and not _is_empty:
+        # Lanes — classify by representative HS code.
+        # Preserves FIX-3 caveat: representative HS may not cover all products on the lane.
+        lanes = [
+            l for l in lanes
+            if classify_shipment(
+                {"hs_code": l.get("representative_lane", {}).get("hs_code", "")},
+                industry,
+            )
+        ]
+        # Shipments — classify by per-row hs_code (exact product match)
+        shipments = [
+            s for s in shipments
+            if classify_shipment({"hs_code": s.get("hs_code", "")}, industry)
+        ]
+        # RoO assessments — classify by hs_code; unavailable-dict passes through unchanged
+        if isinstance(roo_items, list):
+            roo_items = [
+                r for r in roo_items
+                if classify_shipment({"hs_code": r.get("hs_code", "")}, industry)
+            ]
+        # CoO requests — no HS code in schema; filter by trade lane referenced.
+        # A CoO for "KR → US" belongs to that lane: if that lane isn't in the selected
+        # industry, the CoO is not industry-relevant. We parse our own internal format.
+        _lane_od = {(l["origin"], l["destination"]) for l in lanes}
+        coo_filtered = []
+        for _c in coo_requests:
+            _parts = _c.get("lane", "").split(" → ")
+            if len(_parts) == 2 and (_parts[0].strip(), _parts[1].strip()) in _lane_od:
+                coo_filtered.append(_c)
+        coo_requests = coo_filtered
+        # Roadmap — filter by lane_id; roadmap items reference their source lane directly
+        _lane_ids = {l["lane_id"] for l in lanes}
+        roadmap = [item for item in roadmap if item.get("lane_id") in _lane_ids]
+
+        _no_industry_match = not lanes and not shipments
+
+        # Re-derive KPIs from filtered data — never all-industry totals under an industry label
+        if not kpis.get("empty") and not _no_industry_match:
+            _f_elig  = sum(l["eligible_value_m"] for l in lanes)
+            _f_claim = sum(l["claimed_value_m"]  for l in lanes)
+            _f_uncl  = sum(
+                l["unclaimed_savings_k"] for l in lanes
+                if l["unclaimed_savings_k"] is not None
+            )
+            _f_coo_o = sum(
+                1 for c in coo_requests if c["status"] in ("pending", "overdue", "received")
+            )
+            kpis = dict(kpis)
+            kpis["utilization_pct"]         = round(_f_claim / _f_elig * 100, 1) if _f_elig else 0.0
+            kpis["unclaimed_opportunity_m"] = round(_f_uncl / 1_000, 2)
+            kpis["coo_outstanding"]         = _f_coo_o
+        elif _no_industry_match and not kpis.get("empty"):
+            kpis = dict(kpis)
+            kpis["utilization_pct"]         = None
+            kpis["unclaimed_opportunity_m"] = None
+            kpis["coo_outstanding"]         = None
+
     # Period label comes from the data source (dynamic for uploaded data)
     period_label = kpis.get("period_label", "")
 
     # ── Header ──────────────────────────────────────────────────────────
-    _is_sim = (source["shipment_mode"] == "simulated"
-               and source["coo_mode"]  == "simulated")
-    _subtitle = (
-        'Closing the ~23% FTA utilization gap — illustrative benchmarks requiring '
-        'client-specific quantification'
-        if _is_sim else
-        'Showing uploaded data — figures derived from your shipment and CoO files'
-    )
+    _is_empty = (source["shipment_mode"] == "empty")
+    if _is_empty:
+        _subtitle = 'Upload your shipment data to begin — tariff rates sourced from the live aggregator'
+    elif _no_industry_match:
+        _subtitle = (
+            f'No {ind_label} shipments in your uploaded data'
+            ' — switch to All Industries to see your full upload'
+        )
+    else:
+        _subtitle = 'Showing uploaded data — figures derived from your shipment and CoO files'
     header_html = (
         '<a href="/" class="back-link">← Control Tower</a>'
         '<div class="agent-detail-header" '
@@ -2134,11 +2384,11 @@ def agent_fta_preferential():
 
     # ── Upload / data-source section ─────────────────────────────────────
     # Build source badge
-    if _is_sim:
+    if _is_empty:
         _src_badge = (
             '<span style="padding:2px 10px;border-radius:4px;font-size:0.68rem;'
             'font-weight:700;background:#f0eaf8;color:#999;letter-spacing:1px">'
-            'SIMULATED DATA</span>'
+            'NO DATA</span>'
         )
     else:
         _parts = []
@@ -2175,7 +2425,7 @@ def agent_fta_preferential():
             )
 
     # Auto-open the panel when there's a message or when already in uploaded mode
-    _panel_open = "open" if (_feedback or not _is_sim) else ""
+    _panel_open = "open" if (_feedback or _is_empty) else ""
 
     # Column list hint strings
     _shp_req_str  = ", ".join(fta_data_source.SHIPMENT_REQUIRED)
@@ -2253,35 +2503,48 @@ def agent_fta_preferential():
             '<form action="/api/fta/reset" method="post" style="display:inline">'
             '<button type="submit" style="padding:5px 14px;background:#fff;color:#888;'
             'border:1px solid #ddd;border-radius:6px;font-size:0.75rem;cursor:pointer">'
-            '↩ Reset to simulated data</button>'
+            '↩ Clear uploads</button>'
             '</form>'
             '<span style="font-size:0.68rem;color:#bbb">'
-            'Clears all uploads and restores illustrative benchmark data</span>'
+            'Removes all uploaded files and returns to the empty state</span>'
             '</div>'
-            if not _is_sim else ""
+            if not _is_empty else ""
         )
         + '</div></details>'
     )
 
     # ── KPI strip (4 cards) ──────────────────────────────────────────────
+    _util_val = f'{kpis["utilization_pct"]}%' if kpis["utilization_pct"] is not None else "—"
+    _uncl_val = f'${kpis["unclaimed_opportunity_m"]}M' if kpis["unclaimed_opportunity_m"] is not None else "—"
+    _coo_val  = str(kpis["coo_outstanding"]) if kpis["coo_outstanding"] is not None else "—"
+    # FIX A: retroactive claims — None means uncomputable, not zero
+    if kpis["retroactive_claims_k"] is None:
+        _retro_val   = "Not available"
+        _retro_unit  = "Requires retro-eligibility data"
+        _retro_style = "font-size:0.9rem;color:#bbb;font-weight:400"
+    else:
+        _retro_val   = f'${kpis["retroactive_claims_k"]}K'
+        _retro_unit  = f'{kpis["retro_window_label"]} · {period_label}'
+        _retro_style = ""
+    _period_suffix = f' · {period_label}' if period_label and period_label != "—" else ""
     kpi_html = (
         '<div style="display:grid;grid-template-columns:repeat(4,1fr);'
         'gap:16px;margin-bottom:28px">'
         f'<div class="kpi-card" style="border-top:3px solid #A100FF">'
         f'<div class="kpi-label">Utilization Rate</div>'
-        f'<div class="kpi-value">{kpis["utilization_pct"]}%</div>'
+        f'<div class="kpi-value">{_util_val}</div>'
         f'<div class="kpi-unit">{period_label}</div></div>'
         f'<div class="kpi-card" style="border-top:3px solid #F76C6C">'
         f'<div class="kpi-label">Unclaimed Opportunity</div>'
-        f'<div class="kpi-value">${kpis["unclaimed_opportunity_m"]}M</div>'
-        f'<div class="kpi-unit">Duty savings · {period_label}</div></div>'
+        f'<div class="kpi-value">{_uncl_val}</div>'
+        f'<div class="kpi-unit">Duty savings{_period_suffix}</div></div>'
         f'<div class="kpi-card" style="border-top:3px solid #A100FF">'
         f'<div class="kpi-label">Retroactive Claims</div>'
-        f'<div class="kpi-value">${kpis["retroactive_claims_k"]}K</div>'
-        f'<div class="kpi-unit">{kpis["retro_window_label"]} · {period_label}</div></div>'
+        f'<div class="kpi-value" style="{_retro_style}">{_retro_val}</div>'
+        f'<div class="kpi-unit">{_retro_unit}</div></div>'
         f'<div class="kpi-card" style="border-top:3px solid #F5A623">'
         f'<div class="kpi-label">CoOs Outstanding</div>'
-        f'<div class="kpi-value">{kpis["coo_outstanding"]}</div>'
+        f'<div class="kpi-value">{_coo_val}</div>'
         f'<div class="kpi-unit">Pending + overdue + received</div></div>'
         '</div>'
     )
@@ -2295,9 +2558,42 @@ def agent_fta_preferential():
 
     # ── Lane utilization table ───────────────────────────────────────────
     lane_rows = ""
+    if not lanes:
+        _lane_empty = (
+            f'No {ind_label} shipments in your uploaded data'
+            if _no_industry_match else
+            '\U0001f4c2 No shipment data — upload a file above to populate this table'
+        )
+        lane_rows = (
+            '<tr><td colspan="7" style="padding:32px;text-align:center;'
+            f'color:#999;font-size:0.85rem">{_lane_empty}</td></tr>'
+        )
     for lane in lanes:
         util = lane["utilization_pct"]
-        sc   = "#c0392b" if lane["unclaimed_savings_k"] > 200 else "#1a0533"
+        _sav = lane["unclaimed_savings_k"]
+        sc   = "#c0392b" if (_sav or 0) > 200 else "#1a0533"
+        # Rate differential cell — handle None (uncovered lanes)
+        _mfn = lane["mfn_rate_pct"]
+        _pref = lane["preferential_rate_pct"]
+        if _mfn is None:
+            _rate_html = '<span style="color:#bbb;font-size:0.75rem;font-style:italic">no aggregator data</span>'
+        elif _pref is None:
+            _rate_html = (
+                f'<span style="color:#c0392b;font-weight:600">{_mfn}%</span>'
+                f' MFN → <span style="color:#bbb;font-style:italic">pref: —</span>'
+            )
+        else:
+            _rate_html = (
+                f'<span style="color:#c0392b;font-weight:600">{_mfn}%</span>'
+                f' MFN → '
+                f'<span style="color:#12B3A3;font-weight:600">{_pref}%</span>'
+                f' pref'
+            )
+        _sav_html = (
+            '<span style="color:#bbb">—</span>'
+            if _sav is None else
+            f'${_sav}K'
+        )
         lane_rows += (
             '<tr style="border-bottom:1px solid #f5f3fa">'
             f'<td style="padding:10px 12px;font-size:0.82rem">'
@@ -2309,10 +2605,7 @@ def agent_fta_preferential():
             f'<td style="padding:10px 12px;font-size:0.82rem">'
             f'${lane["claimed_value_m"]}M</td>'
             f'<td style="padding:10px 12px;font-size:0.78rem;white-space:nowrap;color:#555">'
-            f'<span style="color:#c0392b;font-weight:600">{lane["mfn_rate_pct"]}%</span>'
-            f' MFN → '
-            f'<span style="color:#12B3A3;font-weight:600">{lane["preferential_rate_pct"]}%</span>'
-            f' pref</td>'
+            f'{_rate_html}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem;white-space:nowrap">'
             f'<div style="background:#e8e0f0;border-radius:3px;height:6px;'
             f'width:80px;display:inline-block">'
@@ -2320,7 +2613,7 @@ def agent_fta_preferential():
             f'width:{util}%"></div></div>'
             f'<span style="margin-left:6px;font-size:0.75rem">{util}%</span></td>'
             f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:{sc}">'
-            f'${lane["unclaimed_savings_k"]}K</td>'
+            f'{_sav_html}</td>'
             '</tr>'
         )
 
@@ -2352,6 +2645,17 @@ def agent_fta_preferential():
     }
     unclaimed     = [s for s in shipments if s["eligibility"] == "eligible-unclaimed"]
     shipment_rows = ""
+    if not unclaimed:
+        if _is_empty:
+            _shp_empty = '\U0001f4c2 No shipment data — upload a file above'
+        elif _no_industry_match:
+            _shp_empty = f'No {ind_label} unclaimed shipments in your uploaded data'
+        else:
+            _shp_empty = '✓ No eligible-unclaimed shipments in the uploaded data'
+        shipment_rows = (
+            '<tr><td colspan="8" style="padding:32px;text-align:center;'
+            f'color:#999;font-size:0.85rem">{_shp_empty}</td></tr>'
+        )
     for s in unclaimed:
         row_bg   = "background:#fff8e6;" if s["ro_status"] == "near-miss" else ""
         ro_badge = ro_styles.get(s["ro_status"], "")
@@ -2380,7 +2684,9 @@ def agent_fta_preferential():
             f'<td style="padding:10px 12px;font-size:0.82rem">'
             f'{s["origin"]} → {s["destination"]}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;'
-            f'color:#A100FF">${s["est_saving_k"]}K</td>'
+            f'color:#A100FF">'
+            + (f'${s["est_saving_k"]}K' if s["est_saving_k"] is not None else '<span style="color:#bbb">—</span>')
+            + '</td>'
             f'<td style="padding:10px 12px">'
             f'<span style="padding:2px 8px;border-radius:4px;font-size:0.72rem;'
             f'font-weight:600;{ro_badge}">{s["ro_status"]}</span>'
@@ -2424,6 +2730,16 @@ def agent_fta_preferential():
         "received":  "background:#e6f0ff;color:#0050b3",
     }
     coo_rows = ""
+    if not coo_requests:
+        _coo_empty = (
+            f'No {ind_label} CoO requests in your uploaded data'
+            if _no_industry_match else
+            '\U0001f4c2 No CoO data — upload a CoO requests file above'
+        )
+        coo_rows = (
+            '<tr><td colspan="4" style="padding:32px;text-align:center;'
+            f'color:#999;font-size:0.85rem">{_coo_empty}</td></tr>'
+        )
     for req in coo_requests:
         badge = coo_badge_styles.get(req["status"], "")
         coo_rows += (
@@ -2470,17 +2786,35 @@ def agent_fta_preferential():
     _roo_unavailable = isinstance(roo_items, dict) and roo_items.get("unavailable")
 
     if _roo_unavailable:
-        _miss_str = ", ".join(roo_items.get("missing_cols", []))
-        roo_body = (
-            '<div style="padding:24px 20px;text-align:center;color:#999">'
-            '\U0001f4cb RoO Compliance Assessment requires additional upload columns:<br>'
-            f'<code style="font-size:0.78rem;color:#A100FF">{_miss_str}</code><br>'
-            '<span style="font-size:0.72rem">Add these columns to your shipment file and re-upload.</span>'
-            '</div>'
-        )
+        _roo_reason = roo_items.get("reason", "")
+        if _roo_reason == "no_upload":
+            roo_body = (
+                '<div style="padding:32px 20px;text-align:center;color:#999">'
+                '\U0001f4c2 Upload shipment data to view RoO compliance assessment'
+                '</div>'
+            )
+        else:
+            _miss_str = ", ".join(roo_items.get("missing_cols", []))
+            roo_body = (
+                '<div style="padding:24px 20px;text-align:center;color:#999">'
+                '\U0001f4cb RoO Compliance Assessment requires additional upload columns:<br>'
+                f'<code style="font-size:0.78rem;color:#A100FF">{_miss_str}</code><br>'
+                '<span style="font-size:0.72rem">Add these columns to your shipment file and re-upload.</span>'
+                '</div>'
+            )
         _roo_footer = ""
     else:
         roo_rows = ""
+        if not roo_items:
+            _roo_empty = (
+                f'No {ind_label} products in your uploaded data'
+                if _no_industry_match else
+                '✓ All assessed products are compliant — no gaps to report'
+            )
+            roo_rows = (
+                f'<tr><td colspan="8" style="padding:32px;text-align:center;'
+                f'color:#999;font-size:0.85rem">{_roo_empty}</td></tr>'
+            )
         for p in roo_items:
             badge    = ro_styles_assess.get(p["ro_status"], "")
             gap_cell = (
@@ -2521,9 +2855,8 @@ def agent_fta_preferential():
         )
         _roo_footer = (
             '<div style="padding:8px 16px;font-size:0.68rem;color:#bbb;border-top:1px solid #f0eaf8">'
-            + ('Illustrative benchmarks — requires client-specific quantification.'
-               if _is_sim else 'Derived from uploaded shipment data.')
-            + '</div>'
+            'Derived from uploaded shipment data.'
+            '</div>'
         )
 
     roo_section = (
@@ -2543,9 +2876,22 @@ def agent_fta_preferential():
 
     # ── Qualification Roadmap (collapsible) ──────────────────────────────
     roadmap_rows = ""
+    if not roadmap:
+        if _is_empty:
+            _rm_msg = '\U0001f4c2 No shipment data — qualification roadmap is generated from lane data'
+        elif _no_industry_match:
+            _rm_msg = f'No {ind_label} lanes in your uploaded data'
+        else:
+            _rm_msg = '✓ All lanes are at or above 75% utilization — no under-utilized lanes to action'
+        roadmap_rows = (
+            '<tr><td colspan="7" style="padding:32px;text-align:center;'
+            f'color:#999;font-size:0.85rem">{_rm_msg}</td></tr>'
+        )
     for item in roadmap:
         effort_badge = effort_styles.get(item["effort"], "")
-        sc = "#c0392b" if item["unclaimed_savings_k"] > 200 else "#1a0533"
+        _rm_sav = item["unclaimed_savings_k"]
+        sc = "#c0392b" if (_rm_sav or 0) > 200 else "#1a0533"
+        _rm_sav_html = f'${_rm_sav}K' if _rm_sav is not None else '<span style="color:#bbb">—</span>'
         roadmap_rows += (
             '<tr style="border-bottom:1px solid #f5f3fa">'
             f'<td style="padding:10px 12px;font-size:0.82rem">{item["lane"]}</td>'
@@ -2553,7 +2899,7 @@ def agent_fta_preferential():
             f'{item["fta_name"]}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem">{item["utilization_pct"]}%</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:{sc}">'
-            f'${item["unclaimed_savings_k"]}K</td>'
+            f'{_rm_sav_html}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem">'
             f'<div style="font-weight:600;color:#1a0533">{item["primary_action"]}</div>'
             f'<div style="font-size:0.75rem;color:#888;margin-top:2px">{item["secondary_action"]}</div>'
@@ -2592,8 +2938,7 @@ def agent_fta_preferential():
         '</table></div>'
         '<div style="padding:8px 16px;font-size:0.68rem;color:#bbb;border-top:1px solid #f0eaf8">'
         'Opportunity figures sourced from FTA Lane Utilization Gap table — same formula. '
-        + ('Illustrative benchmarks — requires client-specific quantification.'
-           if _is_sim else 'Derived from uploaded shipment data.')
+        'Derived from uploaded shipment data.'
         + '</div>'
         '</details>'
     )
@@ -2702,6 +3047,8 @@ function fetchFTAExplain(row, shipmentId) {
         sidebar=_sidebar_html("fta_preferential"),
         content=content,
         scripts=scripts,
+        industry=industry,
+        all_industries=get_industries(),
     )
 
 
@@ -2892,9 +3239,17 @@ def agent_detail(agent_id):
               }
 
               function loadTariffShock() {
-                fetch('/api/tariff-shock')
+                fetch('/api/tariff-shock', {credentials: 'same-origin'})
                   .then(function(r) { return r.json(); })
                   .then(function(data) {
+                    if (data.no_industry_coverage) {
+                      var lbl = data.industry_display_name || data.active_industry || 'this industry';
+                      var ac = document.getElementById('ts-alerts-container');
+                      var rc = document.getElementById('ts-report-container');
+                      if (ac) ac.innerHTML = '<em style="color:#aaa;font-size:0.82rem;">No exposure alerts for ' + lbl + ' yet — coverage expanding.</em>';
+                      if (rc) rc.innerHTML = '<em style="color:#aaa;font-size:0.82rem;">No exposure data for ' + lbl + '.</em>';
+                      return;
+                    }
                     renderAlerts(data.alerts);
                     renderReport(data.reports);
                   })
@@ -2903,7 +3258,7 @@ def agent_detail(agent_id):
 
               // Load tariff feed (right pane)
               function loadTariffFeed() {
-                fetch('/api/tariff-feed')
+                fetch('/api/tariff-feed', {credentials: 'same-origin'})
                   .then(function(r) { return r.json(); })
                   .then(function(data) {
                     var sc = document.getElementById('sources-container');

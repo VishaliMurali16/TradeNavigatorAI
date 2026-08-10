@@ -195,6 +195,15 @@ class AggregatorAgent:
         """
         return [to_feed_entry(r) for r in self._store.list_recent(limit)]
 
+    def recent_raw(self, limit: int) -> list:
+        """Return up to `limit` recent CanonicalRate objects, unformatted.
+
+        Used by the tariff-feed route to filter by industry on structured HS
+        fields (rate.hs6) BEFORE calling to_feed_entry() — avoids string-
+        parsing the feed headline to infer HS scope.
+        """
+        return list(self._store.list_recent(limit))
+
     @property
     def store(self) -> RateStore:
         """Direct access to the rate store (used by the scheduler)."""

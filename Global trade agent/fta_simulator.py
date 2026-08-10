@@ -1,3 +1,8 @@
+# DEAD MODULE — intentionally unimported.
+# The FTA agent uses aggregator rates + client upload only.
+# Do not re-wire: fta_data_source.py routes all non-uploaded paths to clean empty
+# states; there is no "simulated" mode. See fta_data_source.py for the live seam.
+
 """
 FTA & Preferential Trade Agent — synthetic data simulator.
 All values are fixed (deterministic) for reproducible UI rendering.
@@ -73,6 +78,9 @@ def get_fta_lanes() -> list:
             "unclaimed_savings_k": 285,
             "mfn_rate_pct": 7.5,
             "preferential_rate_pct": 0.0,
+            # Representative HS for aggregator query. One code per lane — see FIX-3 note
+            # in fta_data_source._enrich_lanes_from_aggregator().
+            "representative_lane": {"hs_code": "8708.29", "origin": "MX", "destination": "US"},
         },
         {
             "lane_id": "LN-002",
@@ -85,6 +93,8 @@ def get_fta_lanes() -> list:
             "unclaimed_savings_k": 248,
             "mfn_rate_pct": 12.0,
             "preferential_rate_pct": 0.0,
+            # EU is not a single ISO-3166 country; DE used as representative EU market.
+            "representative_lane": {"hs_code": "8542.31", "origin": "VN", "destination": "DE"},
         },
         {
             "lane_id": "LN-003",
@@ -97,6 +107,7 @@ def get_fta_lanes() -> list:
             "unclaimed_savings_k": 214,
             "mfn_rate_pct": 9.0,
             "preferential_rate_pct": 2.5,
+            "representative_lane": {"hs_code": "6105.10", "origin": "VN", "destination": "JP"},
         },
         {
             "lane_id": "LN-004",
@@ -109,6 +120,9 @@ def get_fta_lanes() -> list:
             "unclaimed_savings_k": 195,
             "mfn_rate_pct": 6.5,
             "preferential_rate_pct": 0.0,
+            # DemoConnector has data for 0406.90 KR→US (dairy/KORUS): MFN 7.2%, pref 0.0%.
+            # In production replace with the lane's highest-volume HS code.
+            "representative_lane": {"hs_code": "0406.90", "origin": "KR", "destination": "US"},
         },
         {
             "lane_id": "LN-005",
@@ -121,6 +135,7 @@ def get_fta_lanes() -> list:
             "unclaimed_savings_k": 176,
             "mfn_rate_pct": 6.5,
             "preferential_rate_pct": 0.0,
+            "representative_lane": {"hs_code": "8528.72", "origin": "KR", "destination": "DE"},
         },
         {
             "lane_id": "LN-006",
@@ -133,6 +148,7 @@ def get_fta_lanes() -> list:
             "unclaimed_savings_k": 148,
             "mfn_rate_pct": 5.0,
             "preferential_rate_pct": 0.0,
+            "representative_lane": {"hs_code": "8483.10", "origin": "CA", "destination": "US"},
         },
         {
             "lane_id": "LN-007",
@@ -145,6 +161,7 @@ def get_fta_lanes() -> list:
             "unclaimed_savings_k": 120,
             "mfn_rate_pct": 8.0,
             "preferential_rate_pct": 2.0,
+            "representative_lane": {"hs_code": "2921.41", "origin": "ID", "destination": "JP"},
         },
         {
             "lane_id": "LN-008",
@@ -157,6 +174,7 @@ def get_fta_lanes() -> list:
             "unclaimed_savings_k": 96,
             "mfn_rate_pct": 5.0,
             "preferential_rate_pct": 0.0,
+            "representative_lane": {"hs_code": "8471.30", "origin": "US", "destination": "AU"},
         },
         {
             "lane_id": "LN-009",
@@ -169,6 +187,7 @@ def get_fta_lanes() -> list:
             "unclaimed_savings_k": 88,
             "mfn_rate_pct": 8.0,
             "preferential_rate_pct": 0.0,
+            "representative_lane": {"hs_code": "0304.62", "origin": "MY", "destination": "JP"},
         },
         {
             "lane_id": "LN-010",
@@ -181,6 +200,7 @@ def get_fta_lanes() -> list:
             "unclaimed_savings_k": 78,
             "mfn_rate_pct": 9.5,
             "preferential_rate_pct": 0.0,
+            "representative_lane": {"hs_code": "7408.11", "origin": "PE", "destination": "CA"},
         },
         {
             "lane_id": "LN-011",
@@ -193,6 +213,7 @@ def get_fta_lanes() -> list:
             "unclaimed_savings_k": 54,
             "mfn_rate_pct": 6.0,
             "preferential_rate_pct": 0.0,
+            "representative_lane": {"hs_code": "0709.30", "origin": "GT", "destination": "US"},
         },
     ]
     # Derive unclaimed savings from first principles; sort largest gap first.

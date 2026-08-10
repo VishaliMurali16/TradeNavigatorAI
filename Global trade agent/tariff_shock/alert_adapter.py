@@ -100,4 +100,10 @@ def to_alert(result: ExposureResult) -> dict:
         "agent_id":  "tariff_shock",
         "severity":  severity,
         "message":   message,
+        # Structured lane metadata — used by /api/tariff-shock for industry filtering.
+        # Not rendered by the current UI (renderAlerts reads only timestamp/severity/message).
+        "lane_key":    result.lane_key,
+        "hs6":         result.hs6,
+        "origin":      result.origin,
+        "destination": result.destination,
     }
