@@ -37,65 +37,87 @@ from typing import Any
 import pandas as pd
 
 import fta_simulator as _sim
+from fta_simulator import COUNTRY_NAMES as _CTRY
 
-# ── Column specification ──────────────────────────────────────────────────────
+# ── Column specification (SAP-native field names) ─────────────────────────────
+# See fta_simulator.FIELD_DICTIONARY for provenance marks (🟢/🔴).
 
 # Core — required to render lanes, eligibility feed, and all four KPIs.
 SHIPMENT_REQUIRED: list[str] = [
-    "shipment_id",
-    "product",
-    "hs_code",
-    "origin_country",
-    "destination_country",
-    "value",             # transaction value in raw USD, e.g. 245500 = $245,500
-    "applicable_fta",
-    "claimed_status",    # "claimed" | "unclaimed" | "not-eligible"
-    "entry_date",        # ISO date string: YYYY-MM-DD
-    "mfn_rate",          # MFN tariff rate (%)
-    "preferential_rate", # FTA / preferential tariff rate (%)
+    "TOR_ID",       # Freight Order ID          🟢
+    "PRODUCT_TEXT", # Product Description        🔴
+    "CCNGN",        # Commodity / Tariff Code    🟢
+    "CTYDP",        # Country of Departure       🟢  ISO2 e.g. MX
+    "CTYAR",        # Country of Destination     🟢  ISO2 e.g. US
+    "CUSVAL",       # Customs Value (USD)        🔴  decimal e.g. 245500.00
+    "AGREEMENT",    # Trade Agreement / FTA      🟢
+    "PREF_STATUS",  # Preference Status          🔴  E|U|N
+    "ENTRY_DATE",   # Customs Entry Date         🔴  YYYYMMDD or YYYY-MM-DD accepted
+    "MFN_RATE",     # MFN Duty Rate %            🔴  e.g. 7.500
+    "PREF_RATE",    # Preferential Duty Rate %   🔴  e.g. 0.000
 ]
 
 # Optional — enables RoO Compliance Assessment section.
 SHIPMENT_ROO: list[str] = [
-    "regional_value_content_pct",  # actual RVC of the shipment (%)
-    "roo_threshold_pct",            # RVC threshold required under the FTA (%)
+    "RVC_PCT",       # Regional Value Content % actual  🔴
+    "RVC_THRESHOLD", # Required RoO Threshold %         🔴
 ]
 
 # Optional — enriches Qualification Roadmap with supplier context.
 SHIPMENT_ROADMAP: list[str] = [
-    "supplier_name",
-    "bom_regional_content",  # free-text: regional content breakdown in BOM
+    "SUPPLIER_NAME",        # Supplier Name           🔴
+    "BOM_REGIONAL_CONTENT", # BoM Regional Content %  🔴
 ]
 
-# Required columns for the CoO Requests file.
+# Required columns for the CoO / Proof-of-Origin file.
 COO_REQUIRED: list[str] = [
-    "supplier",
-    "lane",
-    "request_date",
-    "deadline",
-    "status",   # "pending" | "received" | "overdue" | "validated"
+    "SUPPLIER_NAME",   # Supplier Name          🔴
+    "CTYDP",           # Country of Departure   🟢  ISO2
+    "CTYAR",           # Country of Destination 🟢  ISO2
+    "VDECL_REQ_DATE",  # Request Date           🔴  YYYYMMDD or YYYY-MM-DD
+    "VDECL_DEADLINE",  # Deadline               🔴  YYYYMMDD or YYYY-MM-DD
+    "POO_STATUS",      # Proof of Origin Status 🔴  PENDING|RECEIVED|OVERDUE|VALIDATED
 ]
 
-# ── Downloadable template CSV content ────────────────────────────────────────
-# Rows are representative; column order matches SHIPMENT_REQUIRED then optionals.
+# ── Downloadable template CSV ─────────────────────────────────────────────────
+# Uses SAP-native column names.  See fta_simulator.FIELD_DICTIONARY for
+# provenance marks.  Row values are illustrative benchmark data only.
 
 SHIPMENT_TEMPLATE_CSV = """\
-shipment_id,product,hs_code,origin_country,destination_country,value,applicable_fta,claimed_status,entry_date,mfn_rate,preferential_rate,regional_value_content_pct,roo_threshold_pct,supplier_name,bom_regional_content
-SHP-T001,Automotive Parts,8708.29,Mexico,USA,245500,USMCA,unclaimed,2026-06-12,7.5,0.0,68,60,Alpha Automotive MX,68% USMCA-origin steel and aluminum
-SHP-T002,Electronic Components,8542.31,Vietnam,EU,312800,EVFTA,unclaimed,2026-07-03,12.0,0.0,72,40,Viet Electronics JSC,72% ASEAN value-added content
-SHP-T003,Cotton Shirts,6105.10,Vietnam,Japan,87600,RCEP,unclaimed,2026-05-20,9.0,2.5,37,40,Hanoi Apparel JSC,37% regional fabric from Vietnamese mills
-SHP-T004,PCB Assemblies,8534.00,Korea,USA,445600,KORUS,claimed,2026-03-14,6.5,0.0,78,45,Seoul Electronics Co,78% Korean-origin components
-SHP-T005,Auto Wiring Harness,8544.30,Mexico,USA,389200,USMCA,claimed,2026-04-08,7.5,0.0,82,60,Alpha Automotive MX,82% North American content
-SHP-T006,Rare Earth Magnets,8505.11,China,USA,234700,N/A,not-eligible,2026-05-05,5.0,5.0,22,40,,22% regional content only — no qualifying FTA
+TOR_ID,PRODUCT_TEXT,CCNGN,CTYDP,CTYAR,CUSVAL,AGREEMENT,PREF_STATUS,ENTRY_DATE,MFN_RATE,PREF_RATE,RVC_PCT,RVC_THRESHOLD,SUPPLIER_NAME,BOM_REGIONAL_CONTENT
+6100000783,Automotive Parts,8708.29.00,MX,US,245500.00,USMCA,U,20260612,7.500,0.000,68,60,Alpha Automotive MX,68.0
+6100000784,Electronic Components,8542.31.00,VN,EU,312800.00,EVFTA,U,20260703,12.000,0.000,72,40,Viet Electronics JSC,72.0
+6100000785,Cotton Shirts,6105.10.00,VN,JP,87600.00,RCEP,U,20260520,9.000,2.500,37,40,Hanoi Apparel JSC,37.0
+6100000791,PCB Assemblies,8534.00.00,KR,US,445600.00,KORUS,E,20260314,6.500,0.000,78,45,Seoul Electronics Co,78.0
+6100000792,Auto Wiring Harness,8544.30.00,MX,US,389200.00,USMCA,E,20260408,7.500,0.000,82,60,Alpha Automotive MX,82.0
+6100000797,Rare Earth Magnets,8505.11.00,CN,US,234700.00,N/A,N,20260505,5.000,5.000,22,40,China Magnetics Ltd,22.0
 """
 
+# Field dictionary reference sheet row appended to template download
+_FIELD_REF_HEADER = (
+    "\n\n# FIELD DICTIONARY REFERENCE — SAP TM + GTS\n"
+    "# 🟢 = confirmed real SAP field   🔴 = SAP-style, confirm against client SAP release\n"
+    "# SAP_NAME,UNIVERSAL_NAME,PROVENANCE,FORMAT,NOTE\n"
+)
+
+def _field_ref_rows() -> str:
+    lines = [_FIELD_REF_HEADER]
+    for row in _sim.FIELD_DICTIONARY:
+        sap, univ, prov, fmt, note = row[0], row[1], row[2], row[3], row[4]
+        src = row[5] if len(row) > 5 else ""
+        lines.append(f"# {sap},{univ},{prov},{fmt},{note}")
+    return "\n".join(lines) + "\n"
+
+# Full template with field dictionary appended (for download)
+SHIPMENT_TEMPLATE_CSV_WITH_DICT = SHIPMENT_TEMPLATE_CSV + _field_ref_rows()
+
 COO_TEMPLATE_CSV = """\
-supplier,lane,request_date,deadline,status
-Alpha Automotive MX,Mexico → USA,2026-07-01,2026-07-15,overdue
-Viet Textiles JSC,Vietnam → EU,2026-07-05,2026-07-22,pending
-Seoul Electronics Co,Korea → USA,2026-07-10,2026-08-10,pending
-Jakarta Metals PT,Indonesia → Japan,2026-07-08,2026-07-28,received
-Lima Copper SAC,Peru → Canada,2026-07-18,2026-08-18,validated
+SUPPLIER_NAME,CTYDP,CTYAR,VDECL_REQ_DATE,VDECL_DEADLINE,POO_STATUS
+Alpha Automotive MX,MX,US,20260701,20260715,OVERDUE
+Viet Textiles JSC,VN,EU,20260705,20260722,PENDING
+Seoul Electronics Co,KR,US,20260710,20260810,PENDING
+Jakarta Metals PT,ID,JP,20260708,20260728,RECEIVED
+Lima Copper SAC,PE,CA,20260718,20260818,VALIDATED
 """
 
 # ── Generic qualification actions keyed by FTA name ──────────────────────────
@@ -149,12 +171,20 @@ _state: dict[str, Any] = {
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
 def _ro_status(rvc: float, threshold: float) -> str:
-    """Canonical RoO status rule — identical to fta_simulator._derive_ro_status."""
+    """Canonical ROO_STATUS rule — identical to fta_simulator._derive_roo_status.
+    Returns SAP-style codes: Q=Qualified  M=Near-Miss  F=Fail
+    """
     if rvc >= threshold:
-        return "qualified"
+        return "Q"
     if rvc >= threshold - 5:
-        return "near-miss"
-    return "fail"
+        return "M"
+    return "F"
+
+
+def _normalise_dats(raw) -> str:
+    """Accept YYYYMMDD (SAP DATS) or YYYY-MM-DD; return YYYYMMDD for internal use."""
+    s = str(raw).strip().replace("-", "")
+    return s if len(s) == 8 and s.isdigit() else "00000000"
 
 
 def _parse_file(file_bytes: bytes, filename: str) -> pd.DataFrame:
@@ -168,9 +198,9 @@ def _parse_file(file_bytes: bytes, filename: str) -> pd.DataFrame:
 
 
 def _normalise_cols(df: pd.DataFrame) -> pd.DataFrame:
-    """Lowercase + strip whitespace in column names for fault-tolerant matching."""
+    """Strip whitespace from column names; preserve case (SAP columns are UPPERCASE)."""
     df = df.copy()
-    df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
+    df.columns = [str(c).strip().replace(" ", "_") for c in df.columns]
     return df
 
 
@@ -178,7 +208,7 @@ def _validate_shipment(
     df: pd.DataFrame,
 ) -> tuple[bool, list[str], list[str], bool, bool]:
     """
-    Validate a normalised shipment DataFrame.
+    Validate a normalised shipment DataFrame (SAP-native column names).
 
     Returns (ok, errors, warnings, has_roo, has_roadmap).
     ok is False if any required column is absent or the file is empty.
@@ -194,13 +224,16 @@ def _validate_shipment(
     if missing_req:
         errors.append(f"Missing required columns: {', '.join(missing_req)}")
 
-    if "claimed_status" in df.columns:
-        valid_cs = {"claimed", "unclaimed", "not-eligible"}
-        bad_cs = set(df["claimed_status"].dropna().str.strip().str.lower().unique()) - valid_cs
-        if bad_cs:
+    if "PREF_STATUS" in df.columns:
+        valid_ps = {"E", "U", "N"}
+        bad_ps = (
+            set(df["PREF_STATUS"].dropna().str.strip().str.upper().unique()) - valid_ps
+        )
+        if bad_ps:
             warnings.append(
-                f"Unrecognised claimed_status values {bad_cs!r} "
-                "will be treated as 'not-eligible'."
+                f"Unrecognised PREF_STATUS values {bad_ps!r} — "
+                "accepted: E (claimed), U (unclaimed), N (not-eligible). "
+                "Unrecognised values treated as N."
             )
 
     has_roo     = all(c in df.columns for c in SHIPMENT_ROO)
@@ -223,7 +256,9 @@ def _validate_shipment(
 
 
 def _validate_coo(df: pd.DataFrame) -> tuple[bool, list[str], list[str]]:
-    """Validate a normalised CoO DataFrame. Returns (ok, errors, warnings)."""
+    """Validate a normalised CoO DataFrame (SAP-native column names).
+    Returns (ok, errors, warnings).
+    """
     errors:   list[str] = []
     warnings: list[str] = []
 
@@ -235,12 +270,16 @@ def _validate_coo(df: pd.DataFrame) -> tuple[bool, list[str], list[str]]:
     if missing:
         errors.append(f"Missing required columns: {', '.join(missing)}")
 
-    if "status" in df.columns:
-        valid_s = {"pending", "received", "overdue", "validated"}
-        bad_s = set(df["status"].dropna().str.strip().str.lower().unique()) - valid_s
+    if "POO_STATUS" in df.columns:
+        valid_s = {"PENDING", "RECEIVED", "OVERDUE", "VALIDATED"}
+        bad_s = (
+            set(df["POO_STATUS"].dropna().str.strip().str.upper().unique()) - valid_s
+        )
         if bad_s:
             warnings.append(
-                f"Unrecognised status values {bad_s!r} will be treated as 'pending'."
+                f"Unrecognised POO_STATUS values {bad_s!r} — "
+                "accepted: PENDING, RECEIVED, OVERDUE, VALIDATED. "
+                "Unrecognised values treated as PENDING."
             )
 
     return len(errors) == 0, errors, warnings
@@ -249,59 +288,62 @@ def _validate_coo(df: pd.DataFrame) -> tuple[bool, list[str], list[str]]:
 # ── Data derivation: uploaded DataFrame → internal dicts ─────────────────────
 
 def _derive_shipments(df: pd.DataFrame, has_roo: bool) -> list[dict]:
-    """Map shipment DataFrame rows to the internal shipment dict schema."""
-    eligibility_map = {
-        "claimed":      "claimed",
-        "unclaimed":    "eligible-unclaimed",
-        "not-eligible": "not-eligible",
-    }
+    """Map uploaded shipment DataFrame (SAP-native columns) to internal dict schema."""
     result: list[dict] = []
 
     for _, row in df.iterrows():
-        raw_cs      = str(row.get("claimed_status", "")).strip().lower()
-        eligibility = eligibility_map.get(raw_cs, "not-eligible")
+        raw_ps   = str(row.get("PREF_STATUS", "N")).strip().upper()
+        pref_s   = raw_ps if raw_ps in ("E", "U", "N") else "N"
 
-        value_usd = float(row.get("value", 0) or 0)
-        value_k   = round(value_usd / 1_000, 1)
-        mfn       = float(row.get("mfn_rate", 0) or 0)
-        pref      = float(row.get("preferential_rate", 0) or 0)
+        cusval   = float(row.get("CUSVAL", 0) or 0)
+        mfn      = float(row.get("MFN_RATE", 0) or 0)
+        pref     = float(row.get("PREF_RATE", 0) or 0)
 
-        est_saving_k = (
-            round(max(0.0, value_k * (mfn - pref) / 100), 1)
-            if eligibility == "eligible-unclaimed" else 0.0
+        duty_saving = (
+            round(max(0.0, cusval * (mfn - pref) / 100), 2)
+            if pref_s == "U" else 0.0
         )
 
         if has_roo:
-            rvc_raw = row.get("regional_value_content_pct")
-            thr_raw = row.get("roo_threshold_pct")
+            rvc_raw = row.get("RVC_PCT")
+            thr_raw = row.get("RVC_THRESHOLD")
             if pd.notna(rvc_raw) and pd.notna(thr_raw):
                 rvc = float(rvc_raw)
                 thr = float(thr_raw)
-                ro  = _ro_status(rvc, thr)
+                roo = _ro_status(rvc, thr)
             else:
                 rvc, thr = 0.0, 0.0
-                ro = "qualified" if eligibility == "claimed" else "fail"
+                roo = "Q" if pref_s == "E" else "F"
         else:
             rvc, thr = 0.0, 0.0
-            ro = "qualified" if eligibility == "claimed" else "fail"
+            roo = "Q" if pref_s == "E" else "F"
 
-        raw_date   = row.get("entry_date", "")
-        entry_date = str(raw_date)[:10] if pd.notna(raw_date) and raw_date != "" else "—"
+        raw_date   = row.get("ENTRY_DATE", "")
+        entry_date = _normalise_dats(raw_date) if pd.notna(raw_date) and raw_date != "" else "00000000"
 
         result.append({
-            "shipment_id":       str(row.get("shipment_id", "—")),
-            "entry_date":        entry_date,
-            "product":           str(row.get("product", "Unknown")),
-            "hs_code":           str(row.get("hs_code", "—")),
-            "origin":            str(row.get("origin_country", "—")),
-            "destination":       str(row.get("destination_country", "—")),
-            "value_k":           value_k,
-            "fta_name":          str(row.get("applicable_fta", "N/A")),
-            "eligibility":       eligibility,
-            "est_saving_k":      est_saving_k,
-            "rvc_pct":           rvc,
-            "rvc_threshold_pct": thr,
-            "ro_status":         ro,
+            "TOR_ID":               str(row.get("TOR_ID", "—")),
+            "TOR_ITEM":             str(row.get("TOR_ITEM", "000010")),
+            "PRODUCT_ID":           str(row.get("PRODUCT_ID", "—")),
+            "PRODUCT_TEXT":         str(row.get("PRODUCT_TEXT", "Unknown")),
+            "CCNGN":                str(row.get("CCNGN", "—")),
+            "CTYDP":                str(row.get("CTYDP", "—")),
+            "CTYAR":                str(row.get("CTYAR", "—")),
+            "CUCOO":                str(row.get("CUCOO", row.get("CTYDP", "—"))),
+            "CUSVAL":               cusval,
+            "WAERS":                str(row.get("WAERS", "USD")),
+            "AGREEMENT":            str(row.get("AGREEMENT", "N/A")),
+            "MFN_RATE":             mfn,
+            "PREF_RATE":            pref,
+            "PREF_STATUS":          pref_s,
+            "RVC_PCT":              rvc,
+            "RVC_THRESHOLD":        thr,
+            "ROO_STATUS":           roo,
+            "SUPPLIER_ID":          str(row.get("SUPPLIER_ID", "—")),
+            "SUPPLIER_NAME":        str(row.get("SUPPLIER_NAME", "—")),
+            "BOM_REGIONAL_CONTENT": float(row.get("BOM_REGIONAL_CONTENT", 0) or 0),
+            "ENTRY_DATE":           entry_date,
+            "duty_saving":          duty_saving,
         })
 
     return result
@@ -309,133 +351,117 @@ def _derive_shipments(df: pd.DataFrame, has_roo: bool) -> list[dict]:
 
 def _derive_lanes(df: pd.DataFrame) -> list[dict]:
     """
-    Aggregate shipment rows into trade lanes.
+    Aggregate uploaded shipment rows into trade lanes (SAP-native field names).
 
-    Lane key: (applicable_fta, origin_country, destination_country).
-    not-eligible shipments are excluded from eligible/claimed totals.
+    Lane key: (AGREEMENT, CTYDP, CTYAR).
+    PREF_STATUS=N excluded from ELIGIBLE/CLAIMED totals.
 
-    Unclaimed savings are computed at shipment level and summed — so the KPI
-    "Unclaimed Opportunity" is always consistent with the sum over the lane table,
-    which is consistent with the shipment feed.
-
-    Derivation formula (identical to fta_simulator):
-        unclaimed_savings_k = Σ (value_k × (mfn_rate − preferential_rate) / 100)
-                              over unclaimed shipments in the lane.
+    ELIGIBLE_VALUE  = Σ CUSVAL for PREF_STATUS in (E, U)
+    CLAIMED_VALUE   = Σ CUSVAL for PREF_STATUS = E
+    UNCLAIMED_SAVINGS_K = Σ duty_saving for PREF_STATUS = U  [in $K]
     """
     eligible_df = df[
-        df["claimed_status"].str.strip().str.lower().isin(["claimed", "unclaimed"])
+        df["PREF_STATUS"].str.strip().str.upper().isin(["E", "U"])
     ].copy()
 
     lanes: list[dict] = []
     counter = 1
 
-    for (fta, origin, dest), grp in eligible_df.groupby(
-        ["applicable_fta", "origin_country", "destination_country"],
-        sort=False,
+    for (fta, ctydp, ctyar), grp in eligible_df.groupby(
+        ["AGREEMENT", "CTYDP", "CTYAR"], sort=False,
     ):
-        total_val   = grp["value"].sum()
+        total_val   = grp["CUSVAL"].sum()
         claimed_val = grp.loc[
-            grp["claimed_status"].str.strip().str.lower() == "claimed", "value"
+            grp["PREF_STATUS"].str.strip().str.upper() == "E", "CUSVAL"
         ].sum()
-        uncl_grp = grp[grp["claimed_status"].str.strip().str.lower() == "unclaimed"]
+        uncl_grp = grp[grp["PREF_STATUS"].str.strip().str.upper() == "U"]
 
-        # Weighted-average tariff rates across all eligible shipments in the lane
         if total_val > 0:
-            wt_mfn  = (grp["value"] * grp["mfn_rate"]).sum()  / total_val
-            wt_pref = (grp["value"] * grp["preferential_rate"]).sum() / total_val
+            wt_mfn  = (grp["CUSVAL"] * grp["MFN_RATE"]).sum()  / total_val
+            wt_pref = (grp["CUSVAL"] * grp["PREF_RATE"]).sum() / total_val
         else:
             wt_mfn = wt_pref = 0.0
 
-        # Unclaimed savings: shipment-level formula summed over unclaimed rows
         unclaimed_k = round(
-            (
-                uncl_grp["value"] / 1_000
-                * (uncl_grp["mfn_rate"] - uncl_grp["preferential_rate"])
-                / 100
-            ).sum(),
+            (uncl_grp["CUSVAL"] * (uncl_grp["MFN_RATE"] - uncl_grp["PREF_RATE"]) / 100).sum()
+            / 1000,
             1,
         )
-
         util_pct = round(claimed_val / total_val * 100, 1) if total_val else 0.0
 
         lanes.append({
-            "lane_id":               f"UL-{counter:03d}",
-            "origin":                str(origin),
-            "destination":           str(dest),
-            "fta_name":              str(fta),
-            "eligible_value_m":      round(total_val   / 1_000_000, 3),
-            "claimed_value_m":       round(claimed_val / 1_000_000, 3),
-            "mfn_rate_pct":          round(wt_mfn,  2),
-            "preferential_rate_pct": round(wt_pref, 2),
-            "utilization_pct":       util_pct,
-            "unclaimed_savings_k":   unclaimed_k,
-            "retro_eligible_pct":    0,    # not derivable from shipment-level data
-            "retro_k":               0.0,
+            "lane_id":            f"UL-{counter:03d}",
+            "CTYDP":              str(ctydp),
+            "CTYAR":              str(ctyar),
+            "AGREEMENT":          str(fta),
+            "ELIGIBLE_VALUE_M":   round(total_val   / 1_000_000, 3),
+            "CLAIMED_VALUE_M":    round(claimed_val / 1_000_000, 3),
+            "MFN_RATE":           round(wt_mfn,  3),
+            "PREF_RATE":          round(wt_pref, 3),
+            "UTILIZATION_PCT":    util_pct,
+            "UNCLAIMED_SAVINGS_K": unclaimed_k,
+            "retro_eligible_pct": 0,
+            "retro_k":            0.0,
         })
         counter += 1
 
-    lanes.sort(key=lambda x: x["unclaimed_savings_k"], reverse=True)
+    lanes.sort(key=lambda x: x["UNCLAIMED_SAVINGS_K"], reverse=True)
     return lanes
 
 
 def _derive_roo_assessments(df: pd.DataFrame) -> list[dict]:
     """
-    Aggregate RoO status per (product, hs_code, applicable_fta).
-    Uses value-weighted average RVC; derives ro_status via the same rule as
-    fta_simulator (so the badge colours are always consistent).
+    Aggregate RoO status per (PRODUCT_TEXT, CCNGN, AGREEMENT) from uploaded data.
+    Uses value-weighted average RVC_PCT; ROO_STATUS via same rule as fta_simulator.
     """
     result: list[dict] = []
 
-    for (product, hs_code, fta), grp in df.groupby(
-        ["product", "hs_code", "applicable_fta"], sort=False
+    for (product, ccngn, fta), grp in df.groupby(
+        ["PRODUCT_TEXT", "CCNGN", "AGREEMENT"], sort=False
     ):
-        valid = grp[
-            grp["regional_value_content_pct"].notna()
-            & grp["roo_threshold_pct"].notna()
-        ]
+        valid = grp[grp["RVC_PCT"].notna() & grp["RVC_THRESHOLD"].notna()]
         if valid.empty:
             continue
 
-        v_sum   = valid["value"].sum()
+        v_sum   = valid["CUSVAL"].sum()
         avg_rvc = round(
-            (valid["value"] * valid["regional_value_content_pct"]).sum() / v_sum
-            if v_sum else valid["regional_value_content_pct"].mean(),
+            (valid["CUSVAL"] * valid["RVC_PCT"]).sum() / v_sum
+            if v_sum else valid["RVC_PCT"].mean(),
             1,
         )
-        threshold = float(valid["roo_threshold_pct"].mode().iloc[0])
+        threshold = float(valid["RVC_THRESHOLD"].mode().iloc[0])
+        status    = _ro_status(avg_rvc, threshold)
+        gap_pct   = round(max(0.0, threshold - avg_rvc), 1)
 
-        status  = _ro_status(avg_rvc, threshold)
-        gap_pct = round(max(0.0, threshold - avg_rvc), 1)
-
-        if status == "qualified":
-            note = "Passes RVC threshold. Maintain CoO documentation."
-        elif status == "near-miss":
+        status_labels = {"Q": "Qualified", "M": "Near-Miss", "F": "Fail"}
+        if status == "Q":
+            note = "Passes RVC_PCT threshold. Maintain CoO documentation."
+        elif status == "M":
             note = (
-                f"Within {gap_pct}% of RVC threshold — "
+                f"Within {gap_pct}% of RVC_THRESHOLD — "
                 "minor BOM adjustments may qualify this product."
             )
         else:
             note = (
-                f"RVC gap of {gap_pct}% below threshold — "
+                f"RVC_PCT gap of {gap_pct}% below RVC_THRESHOLD — "
                 "significant sourcing changes required."
             )
 
-        # Append supplier names if the column is present
-        if "supplier_name" in df.columns:
-            suppliers = list(grp["supplier_name"].dropna().unique())[:3]
+        if "SUPPLIER_NAME" in df.columns:
+            suppliers = list(grp["SUPPLIER_NAME"].dropna().unique())[:3]
             if suppliers:
                 note += f" Suppliers: {', '.join(str(s) for s in suppliers)}."
 
         result.append({
-            "product":           str(product),
-            "hs_code":           str(hs_code),
-            "fta_name":          str(fta),
-            "roo_test_type":     "Regional Value Content",
-            "rvc_pct":           avg_rvc,
-            "rvc_threshold_pct": threshold,
-            "ro_status":         status,
-            "gap_pct":           gap_pct,
-            "compliance_note":   note,
+            "PRODUCT_TEXT":    str(product),
+            "CCNGN":           str(ccngn),
+            "AGREEMENT":       str(fta),
+            "roo_test_type":   "Regional Value Content",
+            "RVC_PCT":         avg_rvc,
+            "RVC_THRESHOLD":   threshold,
+            "ROO_STATUS":      status,
+            "gap_pct":         gap_pct,
+            "compliance_note": note,
         })
 
     return result
@@ -444,33 +470,30 @@ def _derive_roo_assessments(df: pd.DataFrame) -> list[dict]:
 def _derive_qualification_roadmap(
     lanes: list[dict], df: pd.DataFrame, has_roadmap: bool
 ) -> list[dict]:
-    """
-    Generate qualification actions for under-utilised lanes (< 75% utilization).
-    Action text is FTA-specific.  If roadmap columns are present, supplier names
-    from unclaimed shipments are surfaced in the secondary action.
+    """Generate qualification actions for under-utilised lanes (UTILIZATION_PCT < 75%).
+    Uses SAP-native field names throughout.
     """
     roadmap: list[dict] = []
 
     for lane in lanes:
-        if lane["utilization_pct"] >= 75:
+        if lane["UTILIZATION_PCT"] >= 75:
             continue
 
-        fta      = lane["fta_name"]
+        fta      = lane["AGREEMENT"]
         pri, sec = _FTA_ACTIONS.get(fta, _FTA_ACTIONS_DEFAULT)
 
-        # Enrich secondary action with supplier names from unclaimed shipments
-        if has_roadmap and not df.empty and "supplier_name" in df.columns:
+        if has_roadmap and not df.empty and "SUPPLIER_NAME" in df.columns:
             lane_uncl = df[
-                (df["applicable_fta"] == fta)
-                & (df["origin_country"] == lane["origin"])
-                & (df["destination_country"] == lane["destination"])
-                & (df["claimed_status"].str.strip().str.lower() == "unclaimed")
+                (df["AGREEMENT"] == fta)
+                & (df["CTYDP"] == lane["CTYDP"])
+                & (df["CTYAR"] == lane["CTYAR"])
+                & (df["PREF_STATUS"].str.strip().str.upper() == "U")
             ]
-            suppliers = list(lane_uncl["supplier_name"].dropna().unique())[:2]
+            suppliers = list(lane_uncl["SUPPLIER_NAME"].dropna().unique())[:2]
             if suppliers:
                 sec = f"Priority suppliers: {', '.join(str(s) for s in suppliers)}. {sec}"
 
-        gap = 100 - lane["utilization_pct"]
+        gap = 100 - lane["UTILIZATION_PCT"]
         if gap > 40:
             effort, timeline = "High",   "6–10 weeks"
         elif gap > 20:
@@ -478,27 +501,38 @@ def _derive_qualification_roadmap(
         else:
             effort, timeline = "Low",    "2–3 weeks"
 
+        ctydp_name = _CTRY.get(lane["CTYDP"], lane["CTYDP"])
+        ctyar_name = _CTRY.get(lane["CTYAR"], lane["CTYAR"])
+
         roadmap.append({
-            "lane_id":             lane["lane_id"],
-            "lane":                f'{lane["origin"]} → {lane["destination"]}',
-            "fta_name":            fta,
-            "utilization_pct":     lane["utilization_pct"],
-            "unclaimed_savings_k": lane["unclaimed_savings_k"],
-            "primary_action":      pri,
-            "secondary_action":    sec,
-            "effort":              effort,
-            "timeline":            timeline,
+            "lane_id":              lane["lane_id"],
+            "CTYDP":                lane["CTYDP"],
+            "CTYAR":                lane["CTYAR"],
+            "lane_display":         f"{ctydp_name} → {ctyar_name}",
+            "AGREEMENT":            fta,
+            "UTILIZATION_PCT":      lane["UTILIZATION_PCT"],
+            "UNCLAIMED_SAVINGS_K":  lane["UNCLAIMED_SAVINGS_K"],
+            "primary_action":       pri,
+            "secondary_action":     sec,
+            "effort":               effort,
+            "timeline":             timeline,
         })
 
-    roadmap.sort(key=lambda x: x["unclaimed_savings_k"], reverse=True)
+    roadmap.sort(key=lambda x: x["UNCLAIMED_SAVINGS_K"], reverse=True)
     return roadmap
 
 
 def _derive_period_label(df: pd.DataFrame) -> str:
-    """Human-readable date range from the entry_date column."""
-    if "entry_date" not in df.columns:
+    """Human-readable date range from the ENTRY_DATE column (accepts YYYYMMDD or YYYY-MM-DD)."""
+    if "ENTRY_DATE" not in df.columns:
         return "Uploaded data"
-    dates = pd.to_datetime(df["entry_date"], errors="coerce").dropna()
+    # Normalise to YYYY-MM-DD before parsing
+    normalised = df["ENTRY_DATE"].apply(
+        lambda v: f"{str(v)[:4]}-{str(v)[4:6]}-{str(v)[6:]}"
+        if len(str(v).replace("-", "")) == 8 and str(v).replace("-", "").isdigit()
+        else str(v)
+    )
+    dates = pd.to_datetime(normalised, errors="coerce").dropna()
     if dates.empty:
         return "Uploaded data"
     lo = dates.min().strftime("%b %Y")
@@ -643,17 +677,22 @@ def get_coo_requests() -> list:
     if mode != "uploaded":
         return _sim.get_coo_requests()
 
-    status_norm = {"pending": "pending", "received": "received",
-                   "overdue": "overdue",  "validated": "validated"}
+    valid_status = {"PENDING", "RECEIVED", "OVERDUE", "VALIDATED"}
     result: list[dict] = []
     for _, row in df.iterrows():
-        raw_s = str(row.get("status", "pending")).strip().lower()
+        raw_s   = str(row.get("POO_STATUS", "PENDING")).strip().upper()
+        poo_s   = raw_s if raw_s in valid_status else "PENDING"
+        ctydp   = str(row.get("CTYDP", "—"))
+        ctyar   = str(row.get("CTYAR", "—"))
         result.append({
-            "supplier":     str(row.get("supplier",     "—")),
-            "lane":         str(row.get("lane",         "—")),
-            "request_date": str(row.get("request_date", "—"))[:10],
-            "deadline":     str(row.get("deadline",     "—"))[:10],
-            "status":       status_norm.get(raw_s, "pending"),
+            "SUPPLIER_ID":    str(row.get("SUPPLIER_ID",   "—")),
+            "SUPPLIER_NAME":  str(row.get("SUPPLIER_NAME", "—")),
+            "CTYDP":          ctydp,
+            "CTYAR":          ctyar,
+            "POO_TYPE":       str(row.get("POO_TYPE", "—")),
+            "VDECL_REQ_DATE": _normalise_dats(row.get("VDECL_REQ_DATE", "")),
+            "VDECL_DEADLINE": _normalise_dats(row.get("VDECL_DEADLINE", "")),
+            "POO_STATUS":     poo_s,
         })
     return result
 
@@ -679,11 +718,11 @@ def get_fta_kpis() -> dict:
     lanes = get_fta_lanes()
     coos  = get_coo_requests()
 
-    total_eligible_m  = sum(l["eligible_value_m"]   for l in lanes)
-    total_claimed_m   = sum(l["claimed_value_m"]     for l in lanes)
-    total_unclaimed_k = sum(l["unclaimed_savings_k"] for l in lanes)
+    total_eligible_m  = sum(l["ELIGIBLE_VALUE_M"]    for l in lanes)
+    total_claimed_m   = sum(l["CLAIMED_VALUE_M"]     for l in lanes)
+    total_unclaimed_k = sum(l["UNCLAIMED_SAVINGS_K"] for l in lanes)
     coo_outstanding   = sum(1 for c in coos
-                            if c["status"] in ("pending", "overdue", "received"))
+                            if c["POO_STATUS"] in ("OVERDUE", "PENDING", "RECEIVED"))
 
     util_pct = (
         round(total_claimed_m / total_eligible_m * 100, 1)
@@ -696,7 +735,7 @@ def get_fta_kpis() -> dict:
         "retroactive_claims_k":    0.0,   # retro eligibility not in upload schema
         "coo_outstanding":         coo_outstanding,
         "period_label":            _derive_period_label(df) if df is not None else "Uploaded data",
-        "retro_window_label":      "Not available from upload",
+        "retro_window_label":      "Not available from uploaded data",
     }
 
 

@@ -1,5 +1,6 @@
 import asyncio
 import concurrent.futures
+import json
 import os
 import re
 import threading
@@ -12,7 +13,9 @@ from air import AsyncAIRefinery
 from agents_registry import AGENTS, CLUSTERS, get_agent, agents_by_cluster
 from data_simulator import get_kpis, get_alerts, get_tariff_sources, get_tariff_feed
 import fta_data_source
-from fta_data_source import SHIPMENT_TEMPLATE_CSV, COO_TEMPLATE_CSV
+from fta_data_source import SHIPMENT_TEMPLATE_CSV_WITH_DICT, COO_TEMPLATE_CSV
+from fta_simulator import (COUNTRY_NAMES as _CTRY, PREF_STATUS_LABELS, ROO_STATUS_LABELS,
+                           POO_STATUS_LABELS, FIELD_DICTIONARY as _FIELD_DICTIONARY)
 
 load_dotenv()
 _API_KEY = str(os.getenv("API_KEY"))
@@ -757,39 +760,41 @@ def control_tower():
 @app.route("/api/fta/explain", methods=["POST"])
 def api_fta_explain():
     data         = request.get_json(force=True) or {}
-    shipment_id  = data.get("shipment_id", "")
-    product      = data.get("product", "")
-    hs_code      = data.get("hs_code", "")
-    origin       = data.get("origin", "")
-    destination  = data.get("destination", "")
-    fta_name     = data.get("fta_name", "")
+    # JS passes data-attributes set from SAP field names; ro_status is already
+    # the human-readable label (Qualified / Near-Miss / Fail) sent by the row onclick.
+    shipment_id  = data.get("shipment_id", "")   # TOR_ID
+    product      = data.get("product", "")        # PRODUCT_TEXT
+    hs_code      = data.get("hs_code", "")        # CCNGN
+    origin       = data.get("origin", "")         # CTYDP display name
+    destination  = data.get("destination", "")    # CTYAR display name
+    fta_name     = data.get("fta_name", "")       # AGREEMENT
     est_saving_k = data.get("est_saving_k", 0)
-    ro_status         = data.get("ro_status", "")
-    rvc_pct           = data.get("rvc_pct", 0)
-    rvc_threshold_pct = data.get("rvc_threshold_pct", 0)
+    ro_status         = data.get("ro_status", "")          # human-readable label
+    rvc_pct           = data.get("rvc_pct", 0)             # RVC_PCT
+    rvc_threshold_pct = data.get("rvc_threshold_pct", 0)   # RVC_THRESHOLD
 
     system_prompt = (
         "You are TradeNavigator AI, an expert FTA compliance advisor. "
         "Output ONLY a plain-English explanation, 3-4 sentences, no preamble, "
         "no reasoning steps. Begin immediately with the first word."
     )
-    # Phrase the RoO sentence precisely to match the computed status.
-    if ro_status == "near-miss":
+    # Phrase the RoO sentence precisely to match the computed ROO_STATUS.
+    if ro_status == "Near-Miss":
         roo_sentence = (
-            f"Its actual RVC is {rvc_pct}%, which falls just {rvc_threshold_pct - rvc_pct} "
-            f"percentage point(s) short of the {rvc_threshold_pct}% threshold required "
+            f"Its actual RVC_PCT is {rvc_pct}%, which falls just {rvc_threshold_pct - rvc_pct} "
+            f"percentage point(s) short of the {rvc_threshold_pct}% RVC_THRESHOLD required "
             f"under {fta_name} — a near-miss that could be resolved with targeted "
             f"sourcing adjustments."
         )
-    elif ro_status == "qualified":
+    elif ro_status == "Qualified":
         roo_sentence = (
-            f"Its RVC of {rvc_pct}% comfortably clears the {rvc_threshold_pct}% "
-            f"threshold required under {fta_name}."
+            f"Its RVC_PCT of {rvc_pct}% comfortably clears the {rvc_threshold_pct}% "
+            f"RVC_THRESHOLD required under {fta_name}."
         )
     else:
         roo_sentence = (
-            f"Its RVC of {rvc_pct}% does not meet the {rvc_threshold_pct}% threshold "
-            f"required under {fta_name}."
+            f"Its RVC_PCT of {rvc_pct}% does not meet the {rvc_threshold_pct}% "
+            f"RVC_THRESHOLD required under {fta_name}."
         )
 
     user_prompt = (
@@ -807,23 +812,21 @@ def api_fta_explain():
             raise ValueError("empty response")
     except Exception:
         gap = rvc_threshold_pct - rvc_pct
-        if ro_status == "near-miss":
+        if ro_status == "Near-Miss":
             text = (
-                f"Shipment {shipment_id} ({product}) falls {gap} percentage point(s) "
-                f"short of the {rvc_threshold_pct}% RVC threshold for {fta_name} — "
-                f"at {rvc_pct}%, a targeted supplier invoice restructuring or minor "
-                f"component substitution could close the gap. The ${est_saving_k}K duty "
-                f"saving makes this a high-priority case; request a revised CoO from "
-                f"the supplier within 5 business days."
+                f"TOR_ID {shipment_id} ({product}, CCNGN {hs_code}) has RVC_PCT {rvc_pct}%, "
+                f"falling {gap} pts short of the {rvc_threshold_pct}% RVC_THRESHOLD for {fta_name}. "
+                f"A targeted sourcing adjustment or supplier invoice restructure could close the gap. "
+                f"The ${est_saving_k}K duty saving is at risk — request a revised proof-of-origin "
+                f"from the supplier (SUPPLIER_NAME) within 5 business days."
             )
         else:
             text = (
-                f"Shipment {shipment_id} ({product}) qualifies for {fta_name} preferential "
-                f"treatment on HS {hs_code}: its RVC of {rvc_pct}% clears the "
-                f"{rvc_threshold_pct}% threshold. Claiming this benefit recovers an "
-                f"estimated ${est_saving_k}K in duty. "
-                f"Immediate action: submit the {fta_name} Certificate of Origin to "
-                f"customs within the current entry window."
+                f"TOR_ID {shipment_id} ({product}, CCNGN {hs_code}) qualifies for {fta_name} "
+                f"preferential treatment: RVC_PCT {rvc_pct}% clears the {rvc_threshold_pct}% "
+                f"RVC_THRESHOLD. Claiming PREF_STATUS=E recovers an estimated ${est_saving_k}K in duty. "
+                f"Immediate action: submit the {fta_name} Certificate of Origin to customs "
+                f"within the current entry window."
             )
 
     return jsonify({"explanation": text})
@@ -860,10 +863,10 @@ def fta_template(which):
     from flask import Response
     if which == "shipments":
         return Response(
-            SHIPMENT_TEMPLATE_CSV,
+            SHIPMENT_TEMPLATE_CSV_WITH_DICT,
             mimetype="text/csv",
             headers={"Content-Disposition":
-                     "attachment; filename=fta_shipments_template.csv"},
+                     "attachment; filename=fta_shipments_sap_template.csv"},
         )
     if which == "coo":
         return Response(
@@ -958,6 +961,95 @@ def agent_fta_preferential():
     # Auto-open the panel when there's a message or when already in uploaded mode
     _panel_open = "open" if (_feedback or not _is_sim) else ""
 
+    # ── SAP source badge helper ──────────────────────────────────────────────
+    def _sap_badge(label: str) -> str:
+        return (
+            f'<span style="font-size:0.6rem;font-weight:600;color:#888;'
+            f'background:#f0f0f4;padding:1px 7px;border-radius:3px;'
+            f'letter-spacing:0.5px;margin-left:auto">{label}</span>'
+        )
+
+    # Country + code translation helpers (SAP codes → human-readable)
+    def _ctry(iso2: str) -> str:
+        return _CTRY.get(iso2, iso2)
+
+    def _dats_display(dats: str) -> str:
+        """SAP DATS YYYYMMDD → YYYY-MM-DD for display."""
+        s = str(dats)
+        if len(s) == 8 and s.isdigit():
+            return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+        return s
+
+    # ── Provenance helpers (pull from FIELD_DICTIONARY — single source of truth) ─
+    _fd = {row[0]: row for row in _FIELD_DICTIONARY}
+
+    def _field_json(sap_keys: list) -> str:
+        """Serialize FIELD_DICTIONARY entries for a dot button's data-fields attribute."""
+        rows = []
+        for k in sap_keys:
+            if k not in _fd:
+                continue
+            e = _fd[k]
+            rows.append({
+                "sap":  e[0],
+                "univ": e[1],
+                "prov": "green" if e[2] == "🟢" else "amber",
+                "fmt":  e[3],
+                "src":  e[5] if len(e) > 5 else "SAP GTS",
+                "long": e[6] if len(e) > 6 else e[4],
+            })
+        # HTML-encode JSON so it's safe inside a double-quoted attribute
+        return json.dumps(rows, ensure_ascii=False).replace('"', '&quot;')
+
+    def _prov_btn(display: str, sap_keys: list, size: int = 8) -> str:
+        """Colored circle <button> that opens the persistent SAP provenance panel."""
+        entries = [_fd[k] for k in sap_keys if k in _fd]
+        if not entries:
+            return ""
+        all_green = all(e[2] == "🟢" for e in entries)
+        dot_col   = "#12B3A3" if all_green else "#F5A623"
+        prov_code = "green" if all_green else "amber"
+        data_json = _field_json(sap_keys)
+        return (
+            f'<button class="prov-dot-btn" onclick="openSapProv(this)" '
+            f'data-col-label="{display}" data-prov-code="{prov_code}" '
+            f'data-fields="{data_json}" '
+            f'style="width:{size}px;height:{size}px;border-radius:50%;'
+            f'background:{dot_col};flex-shrink:0;cursor:pointer;border:none;'
+            f'padding:0;display:inline-block;vertical-align:middle" '
+            f'title="Click for SAP field details" '
+            f'aria-label="SAP provenance for {display}"></button>'
+        )
+
+    def _kpi_lbl(display: str, sap_keys: list) -> str:
+        """KPI card label div with clickable provenance dot."""
+        btn = _prov_btn(display, sap_keys, size=9)
+        if not btn:
+            return f'<div class="kpi-label">{display}</div>'
+        return (
+            f'<div class="kpi-label" style="display:flex;align-items:center;gap:5px">'
+            f'{display}{btn}</div>'
+        )
+
+    prov_legend = (
+        '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:14px;'
+        'margin-bottom:10px;padding:7px 14px;background:#f8f6fc;border-radius:8px;'
+        'width:fit-content;border:1px solid #ede8f8">'
+        '<span style="font-size:0.63rem;font-weight:700;color:#aaa;'
+        'text-transform:uppercase;letter-spacing:1.2px">Field provenance</span>'
+        '<span style="display:flex;align-items:center;gap:5px;font-size:0.72rem;color:#555">'
+        '<span style="width:9px;height:9px;border-radius:50%;background:#12B3A3;'
+        'display:inline-block;flex-shrink:0"></span>'
+        'Verified SAP field</span>'
+        '<span style="display:flex;align-items:center;gap:5px;font-size:0.72rem;color:#555">'
+        '<span style="width:9px;height:9px;border-radius:50%;background:#F5A623;'
+        'display:inline-block;flex-shrink:0"></span>'
+        'Pending SAP confirmation</span>'
+        '<span style="font-size:0.63rem;color:#bbb;font-style:italic">'
+        'Click any dot for full SAP field details</span>'
+        '</div>'
+    )
+
     # Column list hint strings
     _shp_req_str  = ", ".join(fta_data_source.SHIPMENT_REQUIRED)
     _shp_opt_str  = ", ".join(fta_data_source.SHIPMENT_ROO + fta_data_source.SHIPMENT_ROADMAP)
@@ -1046,24 +1138,27 @@ def agent_fta_preferential():
 
     # ── KPI strip (4 cards) ──────────────────────────────────────────────
     kpi_html = (
+        f'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">'
+        f'{prov_legend}'
+        f'{_sap_badge("SAP TM + GTS")}</div>'
         '<div style="display:grid;grid-template-columns:repeat(4,1fr);'
         'gap:16px;margin-bottom:28px">'
         f'<div class="kpi-card" style="border-top:3px solid #A100FF">'
-        f'<div class="kpi-label">Utilization Rate</div>'
+        + _kpi_lbl("Utilization Rate", ["PREF_STATUS", "CUSVAL"]) +
         f'<div class="kpi-value">{kpis["utilization_pct"]}%</div>'
         f'<div class="kpi-unit">{period_label}</div></div>'
         f'<div class="kpi-card" style="border-top:3px solid #F76C6C">'
-        f'<div class="kpi-label">Unclaimed Opportunity</div>'
+        + _kpi_lbl("Unclaimed Opportunity", ["CUSVAL", "MFN_RATE", "PREF_RATE"]) +
         f'<div class="kpi-value">${kpis["unclaimed_opportunity_m"]}M</div>'
         f'<div class="kpi-unit">Duty savings · {period_label}</div></div>'
         f'<div class="kpi-card" style="border-top:3px solid #A100FF">'
-        f'<div class="kpi-label">Retroactive Claims</div>'
+        + _kpi_lbl("Retroactive Claims", ["ENTRY_DATE", "CUSVAL", "MFN_RATE", "PREF_RATE"]) +
         f'<div class="kpi-value">${kpis["retroactive_claims_k"]}K</div>'
         f'<div class="kpi-unit">{kpis["retro_window_label"]} · {period_label}</div></div>'
         f'<div class="kpi-card" style="border-top:3px solid #F5A623">'
-        f'<div class="kpi-label">CoOs Outstanding</div>'
+        + _kpi_lbl("CoOs Outstanding", ["POO_STATUS"]) +
         f'<div class="kpi-value">{kpis["coo_outstanding"]}</div>'
-        f'<div class="kpi-unit">Pending + overdue + received</div></div>'
+        f'<div class="kpi-unit">POO_STATUS: Pending + Overdue + Received</div></div>'
         '</div>'
     )
 
@@ -1074,25 +1169,39 @@ def agent_fta_preferential():
         'background:#faf8fe;position:sticky;top:0"'
     )
 
+    def _pth(display: str, sap_keys: list) -> str:
+        """Returns a <th> element with clickable provenance dot button."""
+        btn = _prov_btn(display, sap_keys, size=8)
+        if not btn:
+            return f'<th {th}>{display}</th>'
+        return (
+            f'<th {th}><div style="display:flex;align-items:center;gap:4px">'
+            f'{display}{btn}'
+            f'</div></th>'
+        )
+
     # ── Lane utilization table ───────────────────────────────────────────
     lane_rows = ""
     for lane in lanes:
-        util = lane["utilization_pct"]
-        sc   = "#c0392b" if lane["unclaimed_savings_k"] > 200 else "#1a0533"
+        util       = lane["UTILIZATION_PCT"]
+        uncl_k     = lane["UNCLAIMED_SAVINGS_K"]
+        sc         = "#c0392b" if uncl_k > 200 else "#1a0533"
+        ctydp_name = _ctry(lane["CTYDP"])
+        ctyar_name = _ctry(lane["CTYAR"])
         lane_rows += (
             '<tr style="border-bottom:1px solid #f5f3fa">'
             f'<td style="padding:10px 12px;font-size:0.82rem">'
-            f'{lane["origin"]} → {lane["destination"]}</td>'
+            f'{ctydp_name} → {ctyar_name}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600">'
-            f'{lane["fta_name"]}</td>'
+            f'{lane["AGREEMENT"]}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem">'
-            f'${lane["eligible_value_m"]}M</td>'
+            f'${lane["ELIGIBLE_VALUE_M"]}M</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem">'
-            f'${lane["claimed_value_m"]}M</td>'
+            f'${lane["CLAIMED_VALUE_M"]}M</td>'
             f'<td style="padding:10px 12px;font-size:0.78rem;white-space:nowrap;color:#555">'
-            f'<span style="color:#c0392b;font-weight:600">{lane["mfn_rate_pct"]}%</span>'
+            f'<span style="color:#c0392b;font-weight:600">{lane["MFN_RATE"]}%</span>'
             f' MFN → '
-            f'<span style="color:#12B3A3;font-weight:600">{lane["preferential_rate_pct"]}%</span>'
+            f'<span style="color:#12B3A3;font-weight:600">{lane["PREF_RATE"]}%</span>'
             f' pref</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem;white-space:nowrap">'
             f'<div style="background:#e8e0f0;border-radius:3px;height:6px;'
@@ -1101,7 +1210,7 @@ def agent_fta_preferential():
             f'width:{util}%"></div></div>'
             f'<span style="margin-left:6px;font-size:0.75rem">{util}%</span></td>'
             f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:{sc}">'
-            f'${lane["unclaimed_savings_k"]}K</td>'
+            f'${uncl_k}K</td>'
             '</tr>'
         )
 
@@ -1109,64 +1218,71 @@ def agent_fta_preferential():
         '<div class="section-card">'
         f'<div class="section-card-header">\U0001f310 FTA Lane Utilization Gap'
         f'<span style="font-size:0.72rem;font-weight:400;color:#888;'
-        f'margin-left:10px;letter-spacing:0">({period_label})</span></div>'
+        f'margin-left:10px;letter-spacing:0">({period_label})</span>'
+        f'{_sap_badge("SAP TM + GTS")}</div>'
         '<div style="overflow-x:auto;max-height:300px;overflow-y:auto">'
         '<table style="width:100%;border-collapse:collapse">'
-        f'<thead><tr>'
-        f'<th {th}>Lane</th>'
-        f'<th {th}>FTA Agreement</th>'
-        f'<th {th}>Eligible Value</th>'
-        f'<th {th}>Claimed</th>'
-        f'<th {th}>Rate Differential</th>'
-        f'<th {th}>Utilization</th>'
-        f'<th {th}>Unclaimed Savings</th>'
+        '<thead><tr>'
+        + _pth("Trade Lane", ["CTYDP", "CTYAR"])
+        + _pth("FTA Agreement", ["AGREEMENT"])
+        + _pth("Eligible Value", ["CUSVAL", "PREF_STATUS"])
+        + _pth("Claimed", ["CUSVAL", "PREF_STATUS"])
+        + _pth("Rate Differential", ["MFN_RATE", "PREF_RATE"])
+        + _pth("Utilization", ["PREF_STATUS", "CUSVAL"])
+        + _pth("Unclaimed Savings", ["CUSVAL", "MFN_RATE", "PREF_RATE"]) +
         '</tr></thead>'
         f'<tbody>{lane_rows}</tbody>'
         '</table></div></div>'
     )
 
-    # ── Shipment eligibility feed (eligible-unclaimed only) ──────────────
-    ro_styles = {
-        "qualified": "background:#e6fff9;color:#12B3A3",
-        "near-miss": "background:#fff3cd;color:#856404",
-        "fail":      "background:#fde8e8;color:#c0392b",
+    # ── Shipment eligibility feed (PREF_STATUS=U only) ───────────────────
+    roo_badge_styles = {
+        "Q": "background:#e6fff9;color:#12B3A3",
+        "M": "background:#fff3cd;color:#856404",
+        "F": "background:#fde8e8;color:#c0392b",
     }
-    unclaimed     = [s for s in shipments if s["eligibility"] == "eligible-unclaimed"]
+    unclaimed     = [s for s in shipments if s["PREF_STATUS"] == "U"]
     shipment_rows = ""
     for s in unclaimed:
-        row_bg   = "background:#fff8e6;" if s["ro_status"] == "near-miss" else ""
-        ro_badge = ro_styles.get(s["ro_status"], "")
-        sid      = s["shipment_id"]
+        roo_code  = s["ROO_STATUS"]
+        roo_label = ROO_STATUS_LABELS.get(roo_code, roo_code)
+        row_bg    = "background:#fff8e6;" if roo_code == "M" else ""
+        ro_badge  = roo_badge_styles.get(roo_code, "")
+        tor_id    = s["TOR_ID"]
+        saving_k  = round(s["duty_saving"] / 1000, 1)
+        origin_n  = _ctry(s["CTYDP"])
+        dest_n    = _ctry(s["CTYAR"])
+        entry_d   = _dats_display(s["ENTRY_DATE"])
         shipment_rows += (
             f'<tr style="{row_bg}cursor:pointer;border-bottom:1px solid #f5f3fa" '
-            f"onclick=\"fetchFTAExplain(this, '{sid}')\" "
-            f'data-shipment-id="{sid}" '
-            f'data-product="{s["product"]}" '
-            f'data-hs-code="{s["hs_code"]}" '
-            f'data-origin="{s["origin"]}" '
-            f'data-destination="{s["destination"]}" '
-            f'data-fta-name="{s["fta_name"]}" '
-            f'data-value-k="{s["value_k"]}" '
-            f'data-eligibility="{s["eligibility"]}" '
-            f'data-est-saving-k="{s["est_saving_k"]}" '
-            f'data-ro-status="{s["ro_status"]}" '
-            f'data-rvc-pct="{s["rvc_pct"]}" '
-            f'data-rvc-threshold="{s["rvc_threshold_pct"]}">'
-            f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600">{sid}</td>'
+            f"onclick=\"fetchFTAExplain(this, '{tor_id}')\" "
+            f'data-shipment-id="{tor_id}" '
+            f'data-product="{s["PRODUCT_TEXT"]}" '
+            f'data-hs-code="{s["CCNGN"]}" '
+            f'data-origin="{origin_n}" '
+            f'data-destination="{dest_n}" '
+            f'data-fta-name="{s["AGREEMENT"]}" '
+            f'data-value-k="{round(s["CUSVAL"]/1000,1)}" '
+            f'data-eligibility="eligible-unclaimed" '
+            f'data-est-saving-k="{saving_k}" '
+            f'data-ro-status="{roo_label}" '
+            f'data-rvc-pct="{s["RVC_PCT"]}" '
+            f'data-rvc-threshold="{s["RVC_THRESHOLD"]}">'
+            f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600">{tor_id}</td>'
             f'<td style="padding:10px 12px;font-size:0.78rem;color:#666;'
-            f'font-family:monospace">{s.get("entry_date","—")}</td>'
-            f'<td style="padding:10px 12px;font-size:0.82rem">{s["product"]}</td>'
+            f'font-family:monospace">{entry_d}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem">{s["PRODUCT_TEXT"]}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem;font-family:monospace">'
-            f'{s["hs_code"]}</td>'
+            f'{s["CCNGN"]}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem">'
-            f'{s["origin"]} → {s["destination"]}</td>'
+            f'{origin_n} → {dest_n}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;'
-            f'color:#A100FF">${s["est_saving_k"]}K</td>'
+            f'color:#A100FF">${saving_k}K</td>'
             f'<td style="padding:10px 12px">'
             f'<span style="padding:2px 8px;border-radius:4px;font-size:0.72rem;'
-            f'font-weight:600;{ro_badge}">{s["ro_status"]}</span>'
+            f'font-weight:600;{ro_badge}">{roo_label}</span>'
             f'<div style="font-size:0.65rem;color:#999;margin-top:3px">'
-            f'{s["rvc_pct"]}% / {s["rvc_threshold_pct"]}% req\'d</div></td>'
+            f'RVC_PCT {s["RVC_PCT"]}% / {s["RVC_THRESHOLD"]}% req\'d</div></td>'
             f'<td style="padding:10px 12px;font-size:0.78rem;color:#A100FF;'
             f'font-weight:600">▶ Explain</td>'
             '</tr>'
@@ -1175,20 +1291,21 @@ def agent_fta_preferential():
     shipment_section = (
         '<div class="section-card">'
         '<div class="section-card-header">'
-        f'\U0001f4e6 Shipment Eligibility Feed — Eligible / Unclaimed'
+        f'\U0001f4e6 Shipment Eligibility Feed — Eligible / Unclaimed (PREF_STATUS=U)'
         f'<span style="font-size:0.72rem;font-weight:400;color:#888;'
-        f'margin-left:10px;letter-spacing:0">({period_label})</span></div>'
+        f'margin-left:10px;letter-spacing:0">({period_label})</span>'
+        f'{_sap_badge("SAP TM + GTS")}</div>'
         '<div style="overflow-x:auto">'
         '<table style="width:100%;border-collapse:collapse">'
-        f'<thead><tr>'
-        f'<th {th}>Shipment</th>'
-        f'<th {th}>Entry Date</th>'
-        f'<th {th}>Product</th>'
-        f'<th {th}>HS Code</th>'
-        f'<th {th}>Lane</th>'
-        f'<th {th}>Est. Saving</th>'
-        f'<th {th}>RoO Status</th>'
-        f'<th {th}>Action</th>'
+        '<thead><tr>'
+        + _pth("Freight Order", ["TOR_ID"])
+        + _pth("Entry Date", ["ENTRY_DATE"])
+        + _pth("Product", ["PRODUCT_TEXT"])
+        + _pth("HS Code", ["CCNGN"])
+        + _pth("Lane", ["CTYDP", "CTYAR"])
+        + _pth("Est. Saving", ["CUSVAL", "MFN_RATE", "PREF_RATE"])
+        + _pth("RoO Status", ["ROO_STATUS"])
+        + _pth("Action", []) +
         '</tr></thead>'
         f'<tbody>{shipment_rows}</tbody>'
         '</table></div>'
@@ -1197,48 +1314,57 @@ def agent_fta_preferential():
         '</div>'
     )
 
-    # ── CoO tracker ─────────────────────────────────────────────────────
+    # ── CoO / Proof-of-Origin Tracker ───────────────────────────────────
     coo_badge_styles = {
-        "overdue":   "background:#fde8e8;color:#c0392b",
-        "pending":   "background:#fff8e6;color:#856404",
-        "validated": "background:#e6fff9;color:#12B3A3",
-        "received":  "background:#e6f0ff;color:#0050b3",
+        "OVERDUE":   "background:#fde8e8;color:#c0392b",
+        "PENDING":   "background:#fff8e6;color:#856404",
+        "VALIDATED": "background:#e6fff9;color:#12B3A3",
+        "RECEIVED":  "background:#e6f0ff;color:#0050b3",
     }
     coo_rows = ""
     for req in coo_requests:
-        badge = coo_badge_styles.get(req["status"], "")
+        poo_s      = req["POO_STATUS"]
+        poo_label  = POO_STATUS_LABELS.get(poo_s, poo_s.title())
+        badge      = coo_badge_styles.get(poo_s, "")
+        lane_disp  = f'{_ctry(req["CTYDP"])} → {_ctry(req["CTYAR"])}'
+        deadline_d = _dats_display(req["VDECL_DEADLINE"])
         coo_rows += (
             '<tr style="border-bottom:1px solid #f5f3fa">'
-            f'<td style="padding:10px 12px;font-size:0.82rem">{req["supplier"]}</td>'
-            f'<td style="padding:10px 12px;font-size:0.82rem">{req["lane"]}</td>'
-            f'<td style="padding:10px 12px;font-size:0.82rem">{req["deadline"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem">{req["SUPPLIER_NAME"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem">{lane_disp}</td>'
+            f'<td style="padding:10px 12px;font-size:0.75rem;color:#555">'
+            f'{req["POO_TYPE"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem;font-family:monospace">'
+            f'{deadline_d}</td>'
             f'<td style="padding:10px 12px">'
             f'<span style="padding:2px 8px;border-radius:4px;font-size:0.72rem;'
-            f'font-weight:600;{badge}">{req["status"]}</span></td>'
+            f'font-weight:600;{badge}">{poo_label}</span></td>'
             '</tr>'
         )
 
     coo_section = (
         '<div class="section-card">'
-        '<div class="section-card-header">\U0001f4cb CoO Supplier Tracker'
+        '<div class="section-card-header">\U0001f4cb CoO / Proof-of-Origin Tracker'
         '<span style="font-size:0.72rem;font-weight:400;color:#888;'
-        'margin-left:10px;letter-spacing:0">Current / Open Requests</span></div>'
+        'margin-left:10px;letter-spacing:0">Current Worklist</span>'
+        f'{_sap_badge("SAP GTS")}</div>'
         '<table style="width:100%;border-collapse:collapse">'
-        f'<thead><tr>'
-        f'<th {th}>Supplier</th>'
-        f'<th {th}>Lane</th>'
-        f'<th {th}>Deadline</th>'
-        f'<th {th}>Status</th>'
+        '<thead><tr>'
+        + _pth("Supplier", ["SUPPLIER_NAME"])
+        + _pth("Trade Lane", ["CTYDP", "CTYAR"])
+        + _pth("Doc Type", ["POO_TYPE"])
+        + _pth("Deadline", ["VDECL_DEADLINE"])
+        + _pth("Status", ["POO_STATUS"]) +
         '</tr></thead>'
         f'<tbody>{coo_rows}</tbody>'
         '</table></div>'
     )
 
     # ── RoO Compliance Assessment (collapsible) ──────────────────────────
-    ro_styles_assess = {
-        "qualified": "background:#e6fff9;color:#12B3A3",
-        "near-miss":  "background:#fff3cd;color:#856404",
-        "fail":       "background:#fde8e8;color:#c0392b",
+    roo_badge_styles_assess = {
+        "Q": "background:#e6fff9;color:#12B3A3",
+        "M": "background:#fff3cd;color:#856404",
+        "F": "background:#fde8e8;color:#c0392b",
     }
     effort_styles = {
         "Low":    "background:#e6fff9;color:#12B3A3",
@@ -1246,15 +1372,14 @@ def agent_fta_preferential():
         "High":   "background:#fde8e8;color:#c0392b",
     }
 
-    # roo_items is a list (simulated or uploaded+has_roo) or
-    # {"unavailable": True, "missing_cols": [...]} when RoO cols are absent.
+    # roo_items is a list or {"unavailable": True, "missing_cols": [...]}
     _roo_unavailable = isinstance(roo_items, dict) and roo_items.get("unavailable")
 
     if _roo_unavailable:
         _miss_str = ", ".join(roo_items.get("missing_cols", []))
         roo_body = (
             '<div style="padding:24px 20px;text-align:center;color:#999">'
-            '\U0001f4cb RoO Compliance Assessment requires additional upload columns:<br>'
+            '\U0001f4cb RoO Assessment requires upload columns: '
             f'<code style="font-size:0.78rem;color:#A100FF">{_miss_str}</code><br>'
             '<span style="font-size:0.72rem">Add these columns to your shipment file and re-upload.</span>'
             '</div>'
@@ -1263,23 +1388,25 @@ def agent_fta_preferential():
     else:
         roo_rows = ""
         for p in roo_items:
-            badge    = ro_styles_assess.get(p["ro_status"], "")
-            gap_cell = (
+            roo_code  = p["ROO_STATUS"]
+            roo_label = ROO_STATUS_LABELS.get(roo_code, roo_code)
+            badge     = roo_badge_styles_assess.get(roo_code, "")
+            gap_cell  = (
                 f'<span style="color:#c0392b;font-weight:600">−{p["gap_pct"]} pts</span>'
                 if p["gap_pct"] > 0 else
                 '<span style="color:#12B3A3;font-weight:600">—</span>'
             )
             roo_rows += (
                 '<tr style="border-bottom:1px solid #f5f3fa">'
-                f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600">{p["product"]}</td>'
-                f'<td style="padding:10px 12px;font-size:0.78rem;font-family:monospace">{p["hs_code"]}</td>'
-                f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:#A100FF">{p["fta_name"]}</td>'
+                f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600">{p["PRODUCT_TEXT"]}</td>'
+                f'<td style="padding:10px 12px;font-size:0.78rem;font-family:monospace">{p["CCNGN"]}</td>'
+                f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:#A100FF">{p["AGREEMENT"]}</td>'
                 f'<td style="padding:10px 12px;font-size:0.78rem;color:#555">{p["roo_test_type"]}</td>'
                 f'<td style="padding:10px 12px;font-size:0.82rem;text-align:center">'
-                f'{p["rvc_pct"]}% / {p["rvc_threshold_pct"]}%</td>'
+                f'{p["RVC_PCT"]}% / {p["RVC_THRESHOLD"]}%</td>'
                 f'<td style="padding:10px 12px;text-align:center">'
                 f'<span style="padding:2px 8px;border-radius:4px;font-size:0.72rem;'
-                f'font-weight:600;{badge}">{p["ro_status"]}</span></td>'
+                f'font-weight:600;{badge}">{roo_label}</span></td>'
                 f'<td style="padding:10px 12px;text-align:center">{gap_cell}</td>'
                 f'<td style="padding:10px 12px;font-size:0.78rem;color:#666">{p["compliance_note"]}</td>'
                 '</tr>'
@@ -1287,15 +1414,15 @@ def agent_fta_preferential():
         roo_body = (
             '<div style="overflow-x:auto;max-height:280px;overflow-y:auto">'
             '<table style="width:100%;border-collapse:collapse">'
-            f'<thead><tr>'
-            f'<th {th}>Product</th>'
-            f'<th {th}>HS Code</th>'
-            f'<th {th}>FTA</th>'
-            f'<th {th}>RoO Test</th>'
-            f'<th {th}>RVC (Actual / Req\'d)</th>'
-            f'<th {th}>Status</th>'
-            f'<th {th}>Gap</th>'
-            f'<th {th}>Compliance Note</th>'
+            '<thead><tr>'
+            + _pth("Product", ["PRODUCT_TEXT"])
+            + _pth("HS Code", ["CCNGN"])
+            + _pth("Agreement", ["AGREEMENT"])
+            + _pth("RoO Test", [])
+            + _pth("RVC Actual / Required", ["RVC_PCT", "RVC_THRESHOLD"])
+            + _pth("RoO Status", ["ROO_STATUS"])
+            + _pth("Gap", ["RVC_PCT", "RVC_THRESHOLD"])
+            + _pth("Compliance Note", []) +
             '</tr></thead>'
             f'<tbody>{roo_rows}</tbody>'
             '</table></div>'
@@ -1314,8 +1441,9 @@ def agent_fta_preferential():
         'text-transform:uppercase;letter-spacing:1px;border-bottom:1px solid #f0eaf8;'
         'display:flex;align-items:center;gap:8px;cursor:pointer;list-style:none;'
         'user-select:none">'
-        '\U0001f4cb RoO Compliance Assessment'
-        '<span style="margin-left:auto;font-size:0.72rem;font-weight:400;'
+        '\U0001f4cb RoO / Preference Assessment'
+        f'{_sap_badge("SAP GTS")}'
+        '<span style="font-size:0.72rem;font-weight:400;'
         'color:#A100FF;text-transform:none;letter-spacing:0">▼ expand</span>'
         '</summary>'
         + roo_body + _roo_footer
@@ -1326,15 +1454,15 @@ def agent_fta_preferential():
     roadmap_rows = ""
     for item in roadmap:
         effort_badge = effort_styles.get(item["effort"], "")
-        sc = "#c0392b" if item["unclaimed_savings_k"] > 200 else "#1a0533"
+        sc = "#c0392b" if item["UNCLAIMED_SAVINGS_K"] > 200 else "#1a0533"
         roadmap_rows += (
             '<tr style="border-bottom:1px solid #f5f3fa">'
-            f'<td style="padding:10px 12px;font-size:0.82rem">{item["lane"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem">{item["lane_display"]}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:#A100FF">'
-            f'{item["fta_name"]}</td>'
-            f'<td style="padding:10px 12px;font-size:0.82rem">{item["utilization_pct"]}%</td>'
+            f'{item["AGREEMENT"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem">{item["UTILIZATION_PCT"]}%</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:{sc}">'
-            f'${item["unclaimed_savings_k"]}K</td>'
+            f'${item["UNCLAIMED_SAVINGS_K"]}K</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem">'
             f'<div style="font-weight:600;color:#1a0533">{item["primary_action"]}</div>'
             f'<div style="font-size:0.75rem;color:#888;margin-top:2px">{item["secondary_action"]}</div>'
@@ -1355,19 +1483,20 @@ def agent_fta_preferential():
         'display:flex;align-items:center;gap:8px;cursor:pointer;list-style:none;'
         'user-select:none">'
         '\U0001f5fa Qualification Roadmap — Under-Utilised Lanes'
-        '<span style="margin-left:auto;font-size:0.72rem;font-weight:400;'
+        f'{_sap_badge("SAP GTS")}'
+        '<span style="font-size:0.72rem;font-weight:400;'
         'color:#A100FF;text-transform:none;letter-spacing:0">▼ expand</span>'
         '</summary>'
         '<div style="overflow-x:auto;max-height:280px;overflow-y:auto">'
         '<table style="width:100%;border-collapse:collapse">'
-        f'<thead><tr>'
-        f'<th {th}>Lane</th>'
-        f'<th {th}>FTA</th>'
-        f'<th {th}>Utilization</th>'
-        f'<th {th}>Opportunity</th>'
-        f'<th {th}>Recommended Actions</th>'
-        f'<th {th}>Effort</th>'
-        f'<th {th}>Timeline</th>'
+        '<thead><tr>'
+        + _pth("Lane", ["CTYDP", "CTYAR"])
+        + _pth("FTA", ["AGREEMENT"])
+        + _pth("Utilization", ["PREF_STATUS", "CUSVAL"])
+        + _pth("Opportunity", ["CUSVAL", "MFN_RATE", "PREF_RATE"])
+        + _pth("Recommended Actions", [])
+        + _pth("Effort", [])
+        + _pth("Timeline", []) +
         '</tr></thead>'
         f'<tbody>{roadmap_rows}</tbody>'
         '</table></div>'
@@ -1379,6 +1508,24 @@ def agent_fta_preferential():
         '</details>'
     )
 
+    # ── SAP Provenance Modal (persistent panel, opened by dot buttons) ─────
+    prov_modal_html = (
+        '<div id="sap-prov-modal" '
+        'style="display:none;position:fixed;inset:0;z-index:10000;'
+        'background:rgba(26,5,51,0.48);align-items:center;justify-content:center" '
+        'onclick="if(event.target===this)closeSapProv()">'
+        '<div style="background:#fff;border-radius:14px;padding:28px 32px 24px;'
+        'max-width:560px;width:92%;box-shadow:0 12px 48px rgba(26,5,51,0.25);'
+        'position:relative;max-height:82vh;overflow-y:auto">'
+        '<button onclick="closeSapProv()" '
+        'style="position:absolute;top:14px;right:16px;background:#f5f3fa;border:none;'
+        'width:28px;height:28px;border-radius:50%;font-size:0.85rem;color:#888;'
+        'cursor:pointer;display:flex;align-items:center;justify-content:center;'
+        'line-height:1" title="Close (Esc)" aria-label="Close">&#x2715;</button>'
+        '<div id="sap-prov-content"></div>'
+        '</div></div>'
+    )
+
     # ── Compose page ─────────────────────────────────────────────────────
     content = (
         header_html + upload_section + kpi_html
@@ -1388,6 +1535,7 @@ def agent_fta_preferential():
         + '</div>'
         + roo_section
         + roadmap_section
+        + prov_modal_html
     )
 
     # ── Scripts ──────────────────────────────────────────────────────────
@@ -1473,6 +1621,100 @@ function fetchFTAExplain(row, shipmentId) {
   loadTariffFeed();
   setInterval(loadTariffFeed, 10000);
 })();
+
+// ── SAP Provenance Panel ─────────────────────────────────────────────────
+function openSapProv(btn) {
+    var colLabel = btn.dataset.colLabel;
+    var provCode = btn.dataset.provCode;
+    var fields;
+    try { fields = JSON.parse(btn.dataset.fields); }
+    catch(e) { console.error('Prov panel parse error:', e); return; }
+
+    var overallGreen = provCode === 'green';
+    var dotColor  = overallGreen ? '#12B3A3' : '#F5A623';
+    var provLabel = overallGreen ? '🟢 Verified SAP field' : '🟡 Pending SAP confirmation';
+    var provBg    = overallGreen ? '#e6fff9' : '#fff8e6';
+    var provFg    = overallGreen ? '#0a7060' : '#856404';
+
+    // Build SAP name list and deduplicate source systems
+    var sapNames = fields.map(function(f){ return f.sap; }).join(' · ');
+    var srcMap = {}; fields.forEach(function(f){ srcMap[f.src] = 1; });
+    var srcSystems = Object.keys(srcMap).join(' + ');
+
+    var html = '';
+    // ── Panel header ──────────────────────────────────────────────────────
+    html += '<div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:18px">';
+    html += '<span style="width:15px;height:15px;border-radius:50%;background:' + dotColor +
+            ';display:inline-block;flex-shrink:0;margin-top:4px"></span>';
+    html += '<div style="flex:1">';
+    html += '<div style="font-size:1.05rem;font-weight:700;color:#1a0533;margin-bottom:9px">' +
+            colLabel + '</div>';
+    html += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
+    html += '<span style="font-size:0.72rem;font-weight:700;background:' + provBg +
+            ';color:' + provFg + ';padding:3px 10px;border-radius:5px">' + provLabel + '</span>';
+    html += '<span style="font-family:monospace;font-size:0.76rem;font-weight:700;' +
+            'background:#f0eaf8;color:#A100FF;padding:3px 10px;border-radius:5px">' +
+            sapNames + '</span>';
+    html += '<span style="font-size:0.72rem;background:#f5f5fa;color:#666;' +
+            'padding:3px 10px;border-radius:5px">' + srcSystems + '</span>';
+    html += '</div></div></div>';
+
+    // ── Field descriptions ────────────────────────────────────────────────
+    if (fields.length === 1) {
+        var f = fields[0];
+        html += '<p style="font-size:0.86rem;color:#2d2d3a;line-height:1.72;margin:0 0 16px;' +
+                'border-top:1px solid #f0eaf8;padding-top:16px">' + f.long + '</p>';
+        if (f.fmt) {
+            html += '<div style="background:#faf8fe;border-radius:7px;padding:10px 14px;' +
+                    'border-left:3px solid #A100FF;font-size:0.79rem;color:#555">' +
+                    '<span style="font-weight:700;color:#1a0533">Format / Example:&nbsp;</span>' +
+                    f.fmt + '</div>';
+        }
+    } else {
+        fields.forEach(function(f, i) {
+            var fg   = f.prov === 'green';
+            var fDot = fg ? '#12B3A3' : '#F5A623';
+            var fBg  = fg ? '#e6fff9' : '#fff8e6';
+            var fFg  = fg ? '#0a7060' : '#856404';
+            var fPL  = fg ? '🟢 Verified' : '🟡 Pending confirmation';
+            html += '<div style="border-top:1px solid #f0eaf8;padding-top:14px;' +
+                    'margin-top:' + (i === 0 ? '0' : '14px') + '">';
+            html += '<div style="display:flex;align-items:center;gap:7px;margin-bottom:8px">';
+            html += '<span style="width:8px;height:8px;border-radius:50%;background:' + fDot +
+                    ';display:inline-block;flex-shrink:0"></span>';
+            html += '<span style="font-family:monospace;font-size:0.83rem;font-weight:700;' +
+                    'color:#A100FF">' + f.sap + '</span>';
+            html += '<span style="font-size:0.76rem;color:#888">' + f.univ + '</span>';
+            html += '<span style="font-size:0.65rem;font-weight:700;background:' + fBg +
+                    ';color:' + fFg + ';padding:2px 7px;border-radius:4px;margin-left:auto">' +
+                    fPL + '</span>';
+            html += '</div>';
+            html += '<p style="font-size:0.84rem;color:#2d2d3a;line-height:1.68;margin:0 0 6px">' +
+                    f.long + '</p>';
+            if (f.fmt) {
+                html += '<div style="font-size:0.73rem;color:#777;margin-top:6px">' +
+                        '<span style="font-weight:700;color:#555">Format:&nbsp;</span>' +
+                        f.fmt + '</div>';
+            }
+            html += '</div>';
+        });
+    }
+
+    document.getElementById('sap-prov-content').innerHTML = html;
+    var modal = document.getElementById('sap-prov-modal');
+    modal.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+}
+
+function closeSapProv() {
+    var modal = document.getElementById('sap-prov-modal');
+    if (modal) { modal.style.display = 'none'; }
+    document.body.style.overflow = '';
+}
+
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') { closeSapProv(); }
+});
 </script>
 """
 
