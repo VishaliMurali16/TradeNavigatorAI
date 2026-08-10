@@ -3,6 +3,7 @@ import concurrent.futures
 import json
 import os
 import re
+import secrets
 import threading
 import time
 
@@ -25,6 +26,9 @@ app = Flask(__name__)
 # Cache so repeated refreshes never trigger a second AI call
 _ai_cache: dict = {"text": None, "ts": 0.0, "lock": threading.Lock(), "in_flight": False}
 _AI_CACHE_TTL = 60  # seconds
+
+# Pending uploads waiting for column-mapping confirmation {key: {df, filename}}
+_PENDING_UPLOADS: dict = {}
 
 # ---------------------------------------------------------------------------
 # AI Integration
@@ -838,10 +842,178 @@ def api_fta_explain():
 
 @app.route("/api/fta/upload/shipments", methods=["POST"])
 def fta_upload_shipments():
+    """
+    Dual-mode upload endpoint — works both as a traditional form POST and via fetch().
+
+    Detection: AJAX requests send Accept: application/json.
+      AJAX + native format  → JSON {"ok": true, "redirect": ...}
+      AJAX + needs mapping  → JSON {"needs_mapping": true, ...}
+      AJAX + parse error    → JSON {"ok": false, "error": ...}
+      Form POST (no JS)     → redirect after loading (native) or redirect with error msg
+    """
+    import fta_mapping as _fm
+
+    is_ajax = "application/json" in request.headers.get("Accept", "")
+    app.logger.info("[FTA upload] filename=%s  is_ajax=%s",
+                    request.files.get("shipment_file", type(None)),
+                    is_ajax)
+
     f = request.files.get("shipment_file")
-    if f and f.filename:
-        fta_data_source.upload_shipment_data(f.read(), f.filename)
-    return redirect(url_for("agent_fta_preferential"))
+    if not f or not f.filename:
+        app.logger.warning("[FTA upload] No file in request (files=%s)", list(request.files.keys()))
+        if is_ajax:
+            return jsonify({"ok": False, "error": "No file selected."})
+        return redirect(url_for("agent_fta_preferential"))
+
+    app.logger.info("[FTA upload] Received file: %s  size=%s bytes", f.filename, f.seek(0, 2) or f.tell())
+    f.seek(0)  # rewind after size check
+
+    try:
+        raw_bytes = f.read()
+        app.logger.info("[FTA upload] Read %d bytes from %s", len(raw_bytes), f.filename)
+        df, columns, samples = fta_data_source.parse_for_mapping(raw_bytes, f.filename)
+        app.logger.info("[FTA upload] Parsed OK — %d rows, columns: %s", len(df), columns)
+    except Exception as exc:
+        app.logger.error("[FTA upload] Parse FAILED: %s", exc)
+        if is_ajax:
+            return jsonify({"ok": False, "error": f"Could not parse file: {exc}"})
+        # Non-AJAX: store the error so the page can show it, then redirect
+        import traceback as _tb
+        fta_data_source._state["upload_shipment_msg"] = {
+            "ok": False, "errors": [f"Could not parse '{f.filename}': {exc}"], "warnings": [],
+        }
+        return redirect(url_for("agent_fta_preferential"))
+
+    # ── Native SAP format: load directly (works with or without JS) ──────────
+    if fta_data_source.is_native_format(columns):
+        app.logger.info("[FTA upload] Native SAP format detected — loading directly")
+        result = fta_data_source.upload_shipment_data(raw_bytes, f.filename)
+        app.logger.info("[FTA upload] upload_shipment_data result: %s", result)
+        if is_ajax:
+            return jsonify({"ok": result["ok"],
+                            "errors": result.get("errors", []),
+                            "warnings": result.get("warnings", []),
+                            "redirect": url_for("agent_fta_preferential")})
+        # Plain form POST — redirect so browser follows to the FTA page
+        return redirect(url_for("agent_fta_preferential"))
+
+    # ── Non-native columns — needs mapping ──────────────────────────────────
+    app.logger.info("[FTA upload] Non-native columns, needs mapping: %s", columns)
+
+    if not is_ajax:
+        # JS is not available — we can't show the mapping modal.
+        # Store a message instructing the user to use the SAP template or enable JS.
+        fta_data_source._state["upload_shipment_msg"] = {
+            "ok": False,
+            "errors": [
+                f"Your file '{f.filename}' uses non-SAP column names "
+                f"({', '.join(columns[:5])}{'...' if len(columns) > 5 else ''}). "
+                "JavaScript must be enabled to use the column-mapping dialog, "
+                "or download the SAP template and re-upload."
+            ],
+            "warnings": [],
+        }
+        return redirect(url_for("agent_fta_preferential"))
+
+    # AJAX path — build mapping suggestions and return JSON
+    local_suggestion = _fm.local_map(columns)
+    try:
+        async def _do_llm():
+            return await _fm.llm_map(columns, samples, _call_ai)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            future = ex.submit(asyncio.run, _do_llm())
+            suggested = future.result(timeout=25)
+        app.logger.info("[FTA upload] LLM mapping complete")
+    except Exception as exc:
+        app.logger.warning("[FTA upload] LLM mapping failed (%s), using local fallback", exc)
+        suggested = local_suggestion
+
+    sw = _fm.sanity_warnings(suggested, samples)
+
+    field_info: dict = {}
+    for row in _FIELD_DICTIONARY:
+        sap = row[0]
+        field_info[sap] = {
+            "univ": row[1],
+            "note": row[4],
+            "optional": sap in _fm.OPTIONAL_FIELDS,
+        }
+
+    key = secrets.token_urlsafe(16)
+    _PENDING_UPLOADS[key] = {"df": df, "filename": f.filename}
+    if len(_PENDING_UPLOADS) > 10:
+        oldest = next(iter(_PENDING_UPLOADS))
+        _PENDING_UPLOADS.pop(oldest, None)
+
+    app.logger.info("[FTA upload] Returning needs_mapping JSON, key=%s", key)
+    return jsonify({
+        "needs_mapping":   True,
+        "mapping_key":     key,
+        "filename":        f.filename,
+        "columns":         columns,
+        "samples":         samples,
+        "suggested":       suggested,
+        "field_info":      field_info,
+        "sanity_warnings": sw,
+        "required_fields": [r[0] for r in _fm.REQUIRED_FIELDS],
+        "optional_fields": list(_fm.OPTIONAL_FIELDS),
+    })
+
+
+@app.route("/api/fta/status")
+def fta_status():
+    """Diagnostic endpoint — shows current data-source mode and row counts."""
+    import fta_data_source as _ds
+    src = _ds.get_source_info()
+    try:
+        lanes = _ds.get_fta_lanes()
+        ships = _ds.get_fta_shipments()
+        kpis  = _ds.get_fta_kpis()
+        return jsonify({
+            "source":           src,
+            "lane_count":       len(lanes),
+            "shipment_count":   len(ships),
+            "period_label":     kpis.get("period_label", ""),
+            "utilization_pct":  kpis.get("utilization_pct", 0),
+        })
+    except Exception as exc:
+        return jsonify({"source": src, "error": str(exc)})
+
+
+@app.route("/api/fta/upload/apply-mapping", methods=["POST"])
+def fta_apply_mapping():
+    """
+    Receive user-confirmed column mapping, apply it to the pending DataFrame,
+    validate, derive and load into _state.
+    Returns {"ok": true, "redirect": ...} or {"ok": false, "errors": [...]}
+    """
+    data    = request.get_json(force=True) or {}
+    key     = data.get("mapping_key", "")
+    mapping = data.get("mapping", {})
+
+    pending = _PENDING_UPLOADS.get(key)
+    if not pending:
+        return jsonify({
+            "ok": False,
+            "errors": ["Upload session expired — please re-upload the file."],
+        })
+
+    result = fta_data_source.apply_mapping_and_load_shipments(pending["df"], mapping)
+
+    if result["ok"]:
+        _PENDING_UPLOADS.pop(key, None)
+        return jsonify({
+            "ok":       True,
+            "warnings": result.get("warnings", []),
+            "redirect": url_for("agent_fta_preferential"),
+        })
+
+    return jsonify({
+        "ok":       False,
+        "errors":   result.get("errors", []),
+        "warnings": result.get("warnings", []),
+    })
 
 
 @app.route("/api/fta/upload/coo", methods=["POST"])
@@ -1083,11 +1255,12 @@ def agent_fta_preferential():
         f'<div style="font-size:0.68rem;color:#666;margin-top:6px;line-height:1.5">'
         f'<strong>Required:</strong> {_shp_req_str}<br>'
         f'<strong>Optional (RoO + Roadmap):</strong> {_shp_opt_str}</div></details>'
-        '<form action="/api/fta/upload/shipments" method="post" '
+        '<form id="shp-upload-form" method="post" action="/api/fta/upload/shipments" '
+        'onsubmit="ftaUploadShipments(event)" '
         'enctype="multipart/form-data" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
         '<input type="file" name="shipment_file" accept=".csv,.xlsx" '
         'style="font-size:0.78rem;flex:1;min-width:0">'
-        '<button type="submit" style="padding:6px 14px;background:#A100FF;color:#fff;'
+        '<button id="shp-upload-btn" type="submit" style="padding:6px 14px;background:#A100FF;color:#fff;'
         'border:none;border-radius:6px;font-size:0.78rem;font-weight:600;cursor:pointer">'
         'Upload</button>'
         '<a href="/api/fta/template/shipments" '
@@ -1526,6 +1699,50 @@ def agent_fta_preferential():
         '</div></div>'
     )
 
+    # ── Column-mapping modal HTML ─────────────────────────────────────────
+    mapping_modal_html = (
+        '<div id="fta-mapping-modal" '
+        'style="display:none;position:fixed;inset:0;z-index:10001;'
+        'background:rgba(26,5,51,0.52);align-items:center;justify-content:center" '
+        'onclick="if(event.target===this)closeMappingModal()">'
+        '<div style="background:#fff;border-radius:14px;max-width:740px;width:96%;'
+        'box-shadow:0 16px 56px rgba(26,5,51,0.28);position:relative;'
+        'max-height:90vh;display:flex;flex-direction:column">'
+        # ── Modal header ──
+        '<div style="padding:18px 24px 14px;border-bottom:1px solid #f0eaf8;'
+        'display:flex;align-items:flex-start;gap:10px;flex-shrink:0">'
+        '<div style="flex:1">'
+        '<div style="font-size:0.95rem;font-weight:700;color:#1a0533">'
+        'Column Mapping — confirm before loading</div>'
+        '<div style="font-size:0.75rem;color:#888;margin-top:3px">'
+        'Your file uses different column names. Map each field below, then click '
+        '<strong>Apply &amp; Load</strong>.</div>'
+        '</div>'
+        '<button onclick="closeMappingModal()" '
+        'style="background:#f5f3fa;border:none;width:28px;height:28px;border-radius:50%;'
+        'font-size:0.85rem;color:#888;cursor:pointer;flex-shrink:0;'
+        'display:flex;align-items:center;justify-content:center" '
+        'title="Cancel (Esc)">&#x2715;</button>'
+        '</div>'
+        # ── Modal body (populated by JS) ──
+        '<div id="mapping-modal-body" '
+        'style="padding:16px 24px;overflow-y:auto;flex:1"></div>'
+        # ── Modal footer ──
+        '<div style="padding:14px 24px;border-top:1px solid #f0eaf8;'
+        'display:flex;gap:10px;align-items:center;flex-shrink:0">'
+        '<button id="apply-mapping-btn" onclick="applyMapping()" '
+        'style="padding:7px 18px;background:#A100FF;color:#fff;border:none;'
+        'border-radius:6px;font-size:0.8rem;font-weight:700;cursor:pointer">'
+        'Apply &amp; Load</button>'
+        '<button onclick="closeMappingModal()" '
+        'style="padding:7px 14px;background:#f0eaf8;color:#555;border:none;'
+        'border-radius:6px;font-size:0.8rem;cursor:pointer">Cancel</button>'
+        '<span id="mapping-status" '
+        'style="font-size:0.74rem;color:#888;flex:1;text-align:right"></span>'
+        '</div>'
+        '</div></div>'
+    )
+
     # ── Compose page ─────────────────────────────────────────────────────
     content = (
         header_html + upload_section + kpi_html
@@ -1536,6 +1753,7 @@ def agent_fta_preferential():
         + roo_section
         + roadmap_section
         + prov_modal_html
+        + mapping_modal_html
     )
 
     # ── Scripts ──────────────────────────────────────────────────────────
@@ -1713,8 +1931,275 @@ function closeSapProv() {
 }
 
 document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') { closeSapProv(); }
+    if (e.key === 'Escape') { closeSapProv(); closeMappingModal(); }
 });
+
+// ── FTA Column-Mapping Upload Flow ──────────────────────────────────────────
+
+function ftaUploadShipments(event) {
+    event.preventDefault();
+    var form      = document.getElementById('shp-upload-form');
+    var btn       = document.getElementById('shp-upload-btn');
+    var fileInput = form ? form.querySelector('input[type="file"]') : null;
+    if (!fileInput || !fileInput.files.length) {
+        alert('Please select a file first.');
+        return;
+    }
+
+    var origText = btn ? btn.textContent : 'Upload';
+    if (btn) { btn.textContent = 'Uploading…'; btn.disabled = true; }
+
+    var fd = new FormData();
+    fd.append('shipment_file', fileInput.files[0]);
+
+    fetch('/api/fta/upload/shipments', {
+        method:  'POST',
+        headers: {'Accept': 'application/json'},
+        body:    fd
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (btn) { btn.textContent = origText; btn.disabled = false; }
+        if (data.needs_mapping) {
+            showMappingModal(data);
+        } else if (data.ok) {
+            window.location.reload();
+        } else {
+            alert('Upload error: ' + (data.error || 'Unknown error'));
+        }
+    })
+    .catch(function(e) {
+        if (btn) { btn.textContent = origText; btn.disabled = false; }
+        alert('Upload failed: ' + e.message);
+    });
+}
+
+function showMappingModal(data) {
+    var modal = document.getElementById('fta-mapping-modal');
+    var body  = document.getElementById('mapping-modal-body');
+    if (!modal || !body) return;
+
+    // Stash data for applyMapping()
+    modal._mapData = data;
+
+    var required = data.required_fields || [];
+    var optional = new Set(data.optional_fields || []);
+
+    // Split into mapped (suggestion != null) and unmapped
+    var mapped   = required.filter(function(s) { return data.suggested[s]; });
+    var unmapped = required.filter(function(s) { return !data.suggested[s]; });
+
+    // Unused uploaded columns (not in any suggestion)
+    var usedCols = new Set(Object.values(data.suggested).filter(Boolean));
+    var unused   = (data.columns || []).filter(function(c) { return !usedCols.has(c); });
+
+    var html = '';
+
+    // File badge
+    html += '<div style="font-size:0.74rem;color:#555;margin-bottom:14px;'
+          + 'padding:7px 12px;background:#f8f6fc;border-radius:6px">'
+          + '📄 <strong>' + escH(data.filename) + '</strong>'
+          + ' &nbsp;·&nbsp; ' + (data.columns || []).length + ' columns detected'
+          + '</div>';
+
+    // Section A: Suggested mappings
+    if (mapped.length > 0) {
+        html += '<div style="margin-bottom:18px">'
+              + '<div style="font-size:0.74rem;font-weight:700;color:#0a7060;'
+              + 'display:flex;align-items:center;gap:6px;margin-bottom:8px">'
+              + '<span style="width:9px;height:9px;border-radius:50%;'
+              + 'background:#12B3A3;display:inline-block"></span>'
+              + 'Suggested Mappings (' + mapped.length + ') &mdash; review and adjust if needed'
+              + '</div>'
+              + buildMappingTable(mapped, data, optional)
+              + '</div>';
+    }
+
+    // Section B: Unmapped fields
+    if (unmapped.length > 0) {
+        var unmappedReq = unmapped.filter(function(s) { return !optional.has(s); });
+        var unmappedOpt = unmapped.filter(function(s) { return optional.has(s); });
+        if (unmappedReq.length > 0) {
+            html += '<div style="margin-bottom:18px">'
+                  + '<div style="font-size:0.74rem;font-weight:700;color:#c0392b;'
+                  + 'display:flex;align-items:center;gap:6px;margin-bottom:6px">'
+                  + '<span style="font-size:1rem">⚠️</span>'
+                  + ' Unmapped Required Fields (' + unmappedReq.length + ')'
+                  + ' &mdash; assign a column or the upload will fail'
+                  + '</div>'
+                  + buildMappingTable(unmappedReq, data, optional)
+                  + '</div>';
+        }
+        if (unmappedOpt.length > 0) {
+            html += '<div style="margin-bottom:18px">'
+                  + '<div style="font-size:0.74rem;font-weight:700;color:#888;'
+                  + 'display:flex;align-items:center;gap:6px;margin-bottom:6px">'
+                  + '<span style="font-size:0.85rem">ℹ️</span>'
+                  + ' Unmapped Optional Fields (' + unmappedOpt.length + ')'
+                  + ' &mdash; those dashboard sections will be disabled'
+                  + '</div>'
+                  + buildMappingTable(unmappedOpt, data, optional)
+                  + '</div>';
+        }
+    }
+
+    // Section C: Unused columns
+    if (unused.length > 0) {
+        html += '<div style="margin-bottom:4px">'
+              + '<div style="font-size:0.72rem;font-weight:700;color:#aaa;margin-bottom:5px">'
+              + '🗂️ Unused columns in your file</div>'
+              + '<div style="display:flex;flex-wrap:wrap;gap:5px">';
+        unused.forEach(function(c) {
+            html += '<span style="background:#f5f5f5;color:#888;padding:2px 8px;'
+                  + 'border-radius:3px;font-size:0.7rem;font-family:monospace">'
+                  + escH(c) + '</span>';
+        });
+        html += '</div></div>';
+    }
+
+    body.innerHTML = html;
+    modal.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+    if (document.getElementById('mapping-status')) {
+        document.getElementById('mapping-status').textContent = '';
+    }
+}
+
+function buildMappingTable(sapFields, data, optionalSet) {
+    var colOpts = (data.columns || []).map(function(c) {
+        return '<option value="' + escAttr(c) + '">' + escH(c) + '</option>';
+    }).join('');
+
+    var rows = sapFields.map(function(sap) {
+        var info    = data.field_info[sap] || {};
+        var isOpt   = optionalSet.has(sap);
+        var sugCol  = data.suggested[sap] || '';
+        var warn    = (data.sanity_warnings || {})[sap] || '';
+
+        // Dropdown options with suggested col pre-selected
+        var opts = '<option value="">— none —</option>'
+                 + (data.columns || []).map(function(c) {
+                     var sel = (c === sugCol) ? ' selected' : '';
+                     return '<option value="' + escAttr(c) + '"' + sel + '>'
+                          + escH(c) + '</option>';
+                 }).join('');
+
+        // Sample values for the currently suggested column
+        var sampleVals = sugCol && data.samples && data.samples[sugCol]
+            ? data.samples[sugCol].slice(0, 3).join(', ')
+            : '—';
+
+        return '<tr style="border-bottom:1px solid #faf6ff">'
+             // SAP field name
+             + '<td style="padding:7px 8px;vertical-align:top;white-space:nowrap">'
+             + '<span style="font-family:monospace;font-size:0.74rem;font-weight:700;color:#A100FF">'
+             + escH(sap) + '</span>'
+             + (isOpt ? ' <span style="font-size:0.64rem;color:#ccc">(opt)</span>' : '')
+             + '</td>'
+             // Universal name + note
+             + '<td style="padding:7px 8px;vertical-align:top;max-width:140px">'
+             + '<div style="font-size:0.74rem;font-weight:600;color:#333">' + escH(info.univ || sap) + '</div>'
+             + '<div style="font-size:0.65rem;color:#aaa;line-height:1.3;margin-top:1px">' + escH(info.note || '') + '</div>'
+             + '</td>'
+             // Dropdown + sanity warning
+             + '<td style="padding:7px 8px;vertical-align:top">'
+             + '<select id="map_' + sap + '" '
+             + `onchange="onMappingChange(this,'${sap}')" `
+             + 'style="font-size:0.74rem;padding:3px 6px;border:1px solid #ddd;'
+             + 'border-radius:4px;max-width:170px;cursor:pointer;width:100%">'
+             + opts + '</select>'
+             + (warn ? '<div style="font-size:0.64rem;color:#F5A623;margin-top:3px">⚠ ' + escH(warn) + '</div>' : '')
+             + '</td>'
+             // Sample values (updates on dropdown change)
+             + '<td style="padding:7px 8px;vertical-align:top;max-width:140px">'
+             + '<span id="smp_' + sap + '" style="font-size:0.67rem;color:#999;'
+             + 'font-family:monospace;word-break:break-all">' + escH(sampleVals) + '</span>'
+             + '</td>'
+             + '</tr>';
+    }).join('');
+
+    return '<table style="width:100%;border-collapse:collapse;font-size:0.8rem">'
+         + '<thead><tr style="border-bottom:2px solid #f0eaf8">'
+         + '<th style="padding:5px 8px;text-align:left;font-size:0.66rem;'
+         + 'text-transform:uppercase;color:#aaa;font-weight:700">SAP Field</th>'
+         + '<th style="padding:5px 8px;text-align:left;font-size:0.66rem;'
+         + 'text-transform:uppercase;color:#aaa;font-weight:700">Description</th>'
+         + '<th style="padding:5px 8px;text-align:left;font-size:0.66rem;'
+         + 'text-transform:uppercase;color:#aaa;font-weight:700">Your Column</th>'
+         + '<th style="padding:5px 8px;text-align:left;font-size:0.66rem;'
+         + 'text-transform:uppercase;color:#aaa;font-weight:700">Sample Values</th>'
+         + '</tr></thead>'
+         + '<tbody>' + rows + '</tbody>'
+         + '</table>';
+}
+
+function onMappingChange(sel, sapField) {
+    var modal = document.getElementById('fta-mapping-modal');
+    var data  = modal && modal._mapData;
+    var col   = sel.value;
+    var sp    = document.getElementById('smp_' + sapField);
+    if (sp && data) {
+        var vals = col && data.samples && data.samples[col]
+            ? data.samples[col].slice(0, 3).join(', ')
+            : '—';
+        sp.textContent = vals;
+    }
+}
+
+function applyMapping() {
+    var modal    = document.getElementById('fta-mapping-modal');
+    var data     = modal && modal._mapData;
+    var statusEl = document.getElementById('mapping-status');
+    var btn      = document.getElementById('apply-mapping-btn');
+    if (!data) return;
+
+    // Collect current dropdown values into {SAP_NAME: col_or_null}
+    var mapping = {};
+    (data.required_fields || []).forEach(function(sap) {
+        var sel = document.getElementById('map_' + sap);
+        mapping[sap] = (sel && sel.value) ? sel.value : null;
+    });
+
+    if (btn) { btn.disabled = true; btn.textContent = 'Applying…'; }
+    if (statusEl) statusEl.textContent = 'Processing your data…';
+
+    fetch('/api/fta/upload/apply-mapping', {
+        method:  'POST',
+        headers: {'Content-Type': 'application/json'},
+        body:    JSON.stringify({ mapping_key: data.mapping_key, mapping: mapping }),
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(result) {
+        if (result.ok) {
+            if (statusEl) statusEl.textContent = '✓ Success! Loading dashboard…';
+            setTimeout(function() { window.location.reload(); }, 350);
+        } else {
+            if (btn) { btn.disabled = false; btn.textContent = 'Apply & Load'; }
+            var msg = (result.errors || []).join(' | ') || 'Mapping failed.';
+            if (statusEl) statusEl.textContent = '✗ ' + msg;
+            if (statusEl) statusEl.style.color = '#c0392b';
+        }
+    })
+    .catch(function(e) {
+        if (btn) { btn.disabled = false; btn.textContent = 'Apply & Load'; }
+        if (statusEl) statusEl.textContent = '✗ Request failed: ' + e.message;
+        if (statusEl) statusEl.style.color = '#c0392b';
+    });
+}
+
+function closeMappingModal() {
+    var modal = document.getElementById('fta-mapping-modal');
+    if (modal) modal.style.display = 'none';
+    document.body.style.overflow = '';
+}
+
+// HTML escaping helpers used by mapping modal JS
+function escH(s) {
+    return String(s)
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function escAttr(s) { return escH(s); }
 </script>
 """
 
@@ -1863,4 +2348,8 @@ def agent_detail(agent_id):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    import logging
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s [%(levelname)s] %(message)s")
+    app.logger.setLevel(logging.INFO)
     app.run(debug=False, port=5000, threaded=True, use_reloader=False)

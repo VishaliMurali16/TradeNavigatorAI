@@ -649,6 +649,69 @@ def upload_coo_data(file_bytes: bytes, filename: str) -> dict:
     return result
 
 
+# ── Column-mapping helpers (used by the AJAX upload flow) ────────────────────
+
+def parse_for_mapping(file_bytes: bytes, filename: str):
+    """
+    Parse an uploaded file and return (df, column_list, samples_dict).
+    Columns are normalised (strip/upper) but NOT renamed yet.
+    """
+    import fta_mapping as _fm
+    raw_df  = _parse_file(file_bytes, filename)
+    df      = _normalise_cols(raw_df)
+    columns = list(df.columns)
+    samples = _fm.extract_samples(df)
+    return df, columns, samples
+
+
+def is_native_format(columns: list[str]) -> bool:
+    """
+    True when every column in SHIPMENT_REQUIRED is already present —
+    i.e. the file already uses SAP field names and needs no mapping dialog.
+    """
+    return all(c in columns for c in SHIPMENT_REQUIRED)
+
+
+def apply_mapping_and_load_shipments(
+    df,                         # pandas DataFrame (normalised but not renamed)
+    mapping: dict,              # {SAP_NAME: uploaded_col_or_None, ...}
+) -> dict:
+    """
+    Rename df according to confirmed mapping, validate, derive, store in _state.
+    Returns {"ok": bool, "errors": [...], "warnings": [...]}.
+    """
+    import pandas as pd  # ensure available
+
+    # Build rename dict: uploaded_col -> SAP_NAME
+    rename = {col: sap for sap, col in mapping.items() if col}
+    df_renamed = df.rename(columns=rename)
+    df_renamed  = _normalise_cols(df_renamed)
+
+    ok, errors, warnings, has_roo, has_roadmap = _validate_shipment(df_renamed)
+
+    # We accept the data even when optional sections (RoO, Roadmap) are absent;
+    # _validate_shipment returns ok=False only when required cols are missing.
+    if not ok:
+        result: dict = {"ok": False, "errors": errors, "warnings": warnings}
+        with _lock:
+            _state["upload_shipment_msg"] = result
+        return result
+
+    with _lock:
+        _state.update({
+            "shipment_mode":        "uploaded",
+            "shipment_df":          df_renamed,
+            "shipment_filename":    "(column-mapped upload)",
+            "shipment_has_roo":     has_roo,
+            "shipment_has_roadmap": has_roadmap,
+        })
+        _state["upload_shipment_msg"] = {
+            "ok": True, "errors": [], "warnings": warnings,
+        }
+
+    return {"ok": True, "errors": [], "warnings": warnings}
+
+
 # ── Public API — same signatures as fta_simulator ────────────────────────────
 
 def get_fta_lanes() -> list:
