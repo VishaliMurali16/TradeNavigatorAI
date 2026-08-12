@@ -1,6 +1,6 @@
-shipment_id,product,hs_code,origin_country,destination_country,value,applicable_fta,claimed_status,entry_date,regional_value_content_pct,roo_threshold_pct,supplier_name,bom_regional_content
-SMP-001,Aged Cheddar,0406.90,KR,US,180000,KORUS,unclaimed,2026-06-15,72,45,Seoul Dairy Co,72% Korean-origin dairy inputs
-SMP-002,Gouda Cheese Blend,0406.90,KR,US,220000,KORUS,unclaimed,2026-07-01,68,45,Seoul Dairy Co,68% Korean-origin dairy inputs
-SMP-003,Processed Dairy Mix,0406.90,KR,US,95000,KORUS,claimed,2026-05-20,80,45,Busan Foods Ltd,80% Korean-origin dairy
-SMP-004,Laptop Computer,8471.30,VN,US,340000,N/A,unclaimed,2026-06-22,35,40,Hanoi Tech JSC,35% ASEAN value-added content
-SMP-005,Desktop Workstation,8471.30,CN,US,195000,N/A,unclaimed,2026-07-20,28,40,Shenzhen Systems,28% regional content
+shipment_id,product,hs_code,origin,destination,value,fta_name,claimed_status,entry_date,rvc_pct,roo_threshold_pct,supplier_name,bom_regional_content
+SMP-001,Aged Cheddar,0406.90,KR,US,180000,KORUS,U,20260615,72,45,Seoul Dairy Co,72
+SMP-002,Gouda Cheese Blend,0406.90,KR,US,220000,KORUS,U,20260701,68,45,Seoul Dairy Co,68
+SMP-003,Processed Dairy Mix,0406.90,KR,US,95000,KORUS,E,20260520,80,45,Busan Foods Ltd,80
+SMP-004,Laptop Computer,8471.30,VN,US,340000,,U,20260622,35,40,Hanoi Tech JSC,35
+SMP-005,Desktop Workstation,8471.30,CN,US,195000,,U,20260720,28,40,Shenzhen Systems,28

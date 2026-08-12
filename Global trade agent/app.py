@@ -1105,13 +1105,12 @@ body {
     align-items: center;
     white-space: nowrap;
     height: 100%;
-    animation: ticker-scroll 60s linear infinite;
     will-change: transform;
 }
 .ticker-wrap:hover .ticker-inner { animation-play-state: paused; }
 @keyframes ticker-scroll {
-    0%   { transform: translateX(calc(100vw - var(--sidebar-w))); }
-    100% { transform: translateX(-100%); }
+    0%   { transform: translateX(0); }
+    100% { transform: translateX(var(--tk-to, -50%)); }
 }
 .ticker-item {
     display: inline-flex;
@@ -1131,8 +1130,37 @@ body {
 .tick-cleared { background: rgba(18,179,163,0.22);  color: #12B3A3; }
 .tick-issued  { background: rgba(247,108,108,0.22); color: #F76C6C; }
 .tick-pending { background: rgba(245,166,35,0.22);  color: #F5A623; }
+.tick-dot { width:9px; height:9px; border-radius:50%; border:none; padding:0;
+    flex-shrink:0; cursor:pointer; display:inline-block; vertical-align:middle; }
+.tick-dot.tick-cleared { background:#12B3A3; }
+.tick-dot.tick-issued  { background:#F76C6C; }
+.tick-dot.tick-pending { background:#F5A623; }
 .ticker-src { color: rgba(255,255,255,0.38); font-style: normal; }
 .ticker-sep { color: rgba(161,0,255,0.4); margin: 0 10px; }
+.ticker-item { cursor: pointer; }
+.ticker-item:hover { opacity: 0.75; }
+.ticker-label-btn { background:none; border:none; color:inherit; font:inherit;
+    letter-spacing:inherit; text-transform:inherit; cursor:pointer; padding:0; }
+.ticker-label-btn:hover { text-decoration:underline; }
+
+/* ── Ticker feed dialog ──────────────────────────────────────────── */
+.tf-overlay { display:none; position:fixed; inset:0; background:rgba(26,5,51,0.55);
+    z-index:600; align-items:center; justify-content:center; }
+.tf-overlay.open { display:flex; }
+.tf-card { background:#fff; border-radius:14px; padding:0;
+    width:min(540px,92vw); max-height:78vh; overflow-y:auto;
+    box-shadow:0 24px 64px rgba(26,5,51,0.2); }
+.tf-header { display:flex; align-items:center; justify-content:space-between;
+    padding:14px 20px; border-bottom:1px solid #f0eaf8; position:sticky; top:0; background:#fff; }
+.tf-title { font-size:0.84rem; font-weight:700; color:#1a0533; }
+.tf-close { background:none; border:none; font-size:1.1rem; cursor:pointer; color:#999;
+    padding:4px 8px; line-height:1; border-radius:4px; }
+.tf-close:hover { background:#f5f5f5; }
+.tf-entry { padding:14px 20px; border-bottom:1px solid #faf7ff; }
+.tf-entry:last-child { border-bottom:none; }
+.tf-illus { margin:8px 0 0; padding:7px 10px; background:#fff8e1;
+    border-left:3px solid #ffc107; border-radius:0 6px 6px 0;
+    font-size:0.7rem; color:#7a5c00; }
 
 /* ── AI Chat Widget ──────────────────────────────────────────────── */
 .ai-chat-trigger {
@@ -1276,13 +1304,29 @@ body {
 .ai-chat-input-bar input {
     flex: 1; border: 1.5px solid #e8e0f0; border-radius: 24px;
     padding: 10px 16px; font-size: 0.83rem; outline: none;
-    background: #f8f6fc; color: #999; cursor: not-allowed;
+    background: #f8f6fc; color: #1a0533; cursor: text;
+    transition: border-color 0.15s;
 }
+.ai-chat-input-bar input:focus { border-color: #A100FF; }
 .ai-chat-send-btn {
     width: 38px; height: 38px; border-radius: 50%; border: none;
-    background: #e0d0f0; color: #aaa;
+    background: linear-gradient(135deg, #A100FF, #6600cc); color: #fff;
     display: flex; align-items: center; justify-content: center;
-    cursor: not-allowed; font-size: 1.1rem; flex-shrink: 0;
+    cursor: pointer; font-size: 1.1rem; flex-shrink: 0;
+    transition: transform 0.12s, box-shadow 0.12s;
+}
+.ai-chat-send-btn:hover { transform: scale(1.08); box-shadow: 0 4px 14px rgba(161,0,255,0.4); }
+.ai-chat-typing { display: flex; align-items: center; gap: 5px; padding: 6px 12px; }
+.ai-chat-typing span {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: #A100FF; opacity: 0.4;
+    animation: typingPulse 1.2s ease-in-out infinite;
+}
+.ai-chat-typing span:nth-child(2) { animation-delay: 0.2s; }
+.ai-chat-typing span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes typingPulse {
+    0%, 80%, 100% { opacity: 0.3; transform: scale(0.85); }
+    40% { opacity: 1; transform: scale(1.1); }
 }
 
 /* ── Top bar & Workspace avatar ───────────────────────────────── */
@@ -1330,13 +1374,11 @@ body {
     background: #fff; border-radius: 10px;
     box-shadow: 0 8px 32px rgba(26,5,51,0.18), 0 2px 8px rgba(0,0,0,0.08);
     min-width: 180px; overflow: hidden;
-    z-index: 300;
-    opacity: 0; pointer-events: none;
-    transform: translateY(-6px);
-    transition: opacity 0.15s, transform 0.15s;
+    z-index: 9999;
+    display: none;
 }
 .workspace-dropdown.open {
-    opacity: 1; pointer-events: auto; transform: translateY(0);
+    display: block;
 }
 .ws-item {
     display: flex; align-items: center; gap: 10px;
@@ -1550,10 +1592,9 @@ def _sidebar_html(active_id: str = "") -> str:
       <button class="ai-chat-trigger" onclick="openAIChat()">
         <span class="ct-icon">🤖</span>
         <span class="ct-label">
-          AI Assistant
-          <small>Ask anything about trade</small>
+          AI FTA Advisor
+          <small>Ask about FTA, tariffs &amp; RoO</small>
         </span>
-        <span class="ct-soon">Soon</span>
       </button>
     </nav>
     """
@@ -1579,7 +1620,7 @@ BASE = """<!DOCTYPE html>
     </a>
   </div>
   <div class="topbar-avatar-wrap">
-    <button class="topbar-avatar" id="workspaceBtn" onclick="toggleWorkspaceMenu()" aria-label="Workspace">
+    <button class="topbar-avatar" id="workspaceBtn" aria-label="Workspace">
       <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
         <circle cx="12" cy="8" r="4" fill="currentColor"/>
         <path d="M4 20c0-4 3.582-7 8-7s8 3 8 7" fill="currentColor"/>
@@ -1604,11 +1645,25 @@ BASE = """<!DOCTYPE html>
   </div>
 </main>
 <div class="ticker-wrap" id="tariffTicker">
-  <div class="ticker-label"><span class="ticker-dot" id="tickerDot" aria-hidden="true"></span>Live Rates</div>
+  <div class="ticker-label">
+    <span class="ticker-dot" id="tickerDot" aria-hidden="true"></span>
+    <button class="ticker-label-btn" onclick="openTfList()" title="Click to view all live rate entries" aria-label="View live rate feed">Live Rates</button>
+  </div>
   <div class="ticker-track" id="tickerTrack">
-    <div class="ticker-inner" id="tickerInner">
-      <span style="color:rgba(255,255,255,0.35);font-style:italic;padding-left:16px">Loading tariff intelligence&hellip;</span>
+    <div class="ticker-inner" id="tickerInner"{% if ticker_initial is defined %} style="animation:ticker-scroll 130s linear infinite"{% endif %}>
+      {% if ticker_initial is defined %}{{ ticker_initial | safe }}{% else %}<span style="color:rgba(255,255,255,0.35);font-style:italic;padding-left:16px">Loading tariff intelligence&hellip;</span>{% endif %}
     </div>
+  </div>
+</div>
+
+<!-- ── Ticker feed dialog ──────────────────────────────────────── -->
+<div class="tf-overlay" id="tfOverlay" onclick="if(event.target===this)closeTfDialog()">
+  <div class="tf-card">
+    <div class="tf-header">
+      <div class="tf-title" id="tfTitle">Live Rate Feed</div>
+      <button class="tf-close" onclick="closeTfDialog()" aria-label="Close">&#x2715;</button>
+    </div>
+    <div id="tfBody"></div>
   </div>
 </div>
 {{ scripts | safe }}
@@ -1650,38 +1705,22 @@ BASE = """<!DOCTYPE html>
       <button class="ai-chat-close" onclick="closeAIChat()" title="Close">&#x2715;</button>
     </div>
 
-    <div class="ai-chat-messages">
+    <div class="ai-chat-messages" id="chatMessages">
       <div class="chat-bubble-row bot">
         <div class="cb-avatar">🤖</div>
         <div class="chat-bubble bot">
-          Hi there! I&#39;m your <strong>AI Trade Assistant</strong>.<br><br>
-          I&#39;m designed to help you navigate tariff classifications,
-          trade compliance questions, duty optimisation strategies,
-          and real-time policy alerts — all in plain language.
-        </div>
-      </div>
-
-      <div class="chat-coming-soon-card">
-        <div class="cc-heading">🚧 Coming in the next release</div>
-        <ul>
-          <li>Ask any trade compliance or tariff question in plain English</li>
-          <li>Get instant HS code classification guidance</li>
-          <li>Explain duty-optimisation opportunities across your lanes</li>
-          <li>Summarise recent tariff shock alerts and their impact</li>
-          <li>Suggest FTA eligibility based on origin &amp; product type</li>
-        </ul>
-        <div class="cc-footer">
-          This assistant will be fully operational in the upcoming release.
-          Stay tuned — it&#39;s almost here.
+          Hi! I&#39;m your <strong>FTA Advisor</strong>. Ask me anything about
+          Free Trade Agreements, Rules of Origin, preferential tariffs, or
+          trade compliance — I&#39;ll help you navigate it.
         </div>
       </div>
     </div>
 
     <div class="ai-chat-input-bar">
-      <input type="text" disabled
-             placeholder="Chat will be available in the next release…"
-             title="Coming soon — chat is not yet active">
-      <button class="ai-chat-send-btn" disabled title="Coming soon">&#x2191;</button>
+      <input type="text" id="chatInput"
+             placeholder="Ask about FTA eligibility, RoO, tariff rates…"
+             autocomplete="off">
+      <button class="ai-chat-send-btn" id="chatSend" title="Send">&#x2191;</button>
     </div>
 
   </div>
@@ -1703,18 +1742,94 @@ BASE = """<!DOCTYPE html>
   window.closeAIChat = closeAIChat;
   window.closeAIChatOverlay = closeAIChatOverlay;
 
-  // Workspace avatar dropdown
-  function toggleWorkspaceMenu() {
-    document.getElementById('workspaceMenu').classList.toggle('open');
-  }
-  window.toggleWorkspaceMenu = toggleWorkspaceMenu;
-  document.addEventListener('click', function(e) {
-    var btn = document.getElementById('workspaceBtn');
-    var menu = document.getElementById('workspaceMenu');
-    if (btn && menu && !btn.contains(e.target) && !menu.contains(e.target)) {
-      menu.classList.remove('open');
+  // ── FTA Chat ──────────────────────────────────────────────────────────────
+  function _appendMsg(role, html) {
+    var box = document.getElementById('chatMessages');
+    if (!box) return;
+    var row = document.createElement('div');
+    row.className = 'chat-bubble-row ' + (role === 'bot' ? 'bot' : 'user');
+    if (role === 'bot') {
+      row.innerHTML = '<div class="cb-avatar">🤖</div>'
+        + '<div class="chat-bubble bot">' + html + '</div>';
+    } else {
+      row.innerHTML = '<div class="chat-bubble user">' + html + '</div>';
     }
+    box.appendChild(row);
+    box.scrollTop = box.scrollHeight;
+    return row;
+  }
+
+  function _appendTyping() {
+    var box = document.getElementById('chatMessages');
+    if (!box) return null;
+    var row = document.createElement('div');
+    row.className = 'chat-bubble-row bot';
+    row.innerHTML = '<div class="cb-avatar">🤖</div>'
+      + '<div class="chat-bubble bot"><div class="ai-chat-typing">'
+      + '<span></span><span></span><span></span></div></div>';
+    box.appendChild(row);
+    box.scrollTop = box.scrollHeight;
+    return row;
+  }
+
+  function _escapeHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+            .replace(/\\n/g,'<br>');
+  }
+
+  function sendChatMessage() {
+    var inp = document.getElementById('chatInput');
+    var btn = document.getElementById('chatSend');
+    if (!inp) return;
+    var msg = inp.value.trim();
+    if (!msg) return;
+    inp.value = '';
+    _appendMsg('user', _escapeHtml(msg));
+    if (btn) btn.disabled = true;
+    var typing = _appendTyping();
+    fetch('/api/fta-chat', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message: msg})
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (typing) typing.remove();
+      _appendMsg('bot', _escapeHtml(data.reply || '(no response)'));
+    })
+    .catch(function() {
+      if (typing) typing.remove();
+      _appendMsg('bot', 'Connection error — please try again.');
+    })
+    .finally(function() {
+      if (btn) btn.disabled = false;
+      if (inp) inp.focus();
+    });
+  }
+  window.sendChatMessage = sendChatMessage;
+
+  var _chatInp = document.getElementById('chatInput');
+  var _chatBtn = document.getElementById('chatSend');
+  if (_chatInp) _chatInp.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
   });
+  if (_chatBtn) _chatBtn.addEventListener('click', sendChatMessage);
+
+  // Workspace avatar dropdown
+  (function() {
+    var btn  = document.getElementById('workspaceBtn');
+    var menu = document.getElementById('workspaceMenu');
+    if (!btn || !menu) return;
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      menu.classList.toggle('open');
+    });
+    document.addEventListener('click', function(e) {
+      if (!btn.contains(e.target) && !menu.contains(e.target)) {
+        menu.classList.remove('open');
+      }
+    });
+  })();
 
   // Rate source info dialog
   var _RS_MSG = {
@@ -1749,12 +1864,74 @@ BASE = """<!DOCTYPE html>
     if (e.key === 'Escape') {
       closeAIChat();
       closeRsDialog();
+      closeTfDialog();
       var menu = document.getElementById('workspaceMenu');
       if (menu) menu.classList.remove('open');
     }
   });
 
-  // Bottom tariff ticker — polls /api/tariff-feed every 10s
+  // ── Ticker feed dialog ────────────────────────────────────────────
+  var _feedData = [];
+  var _feedIndustryLabel = 'All Industries';
+
+  function _tfEntryHtml(ev) {
+    var illusHtml = ev.illustrative
+      ? '<div class="tf-illus">&#x26A0;&#xFE0F; Illustrative — not live data. This entry is from the system-health simulator, not a live tariff connector.</div>'
+      : '';
+    var detailHtml = (ev.detail && ev.detail !== 'No additional details')
+      ? '<div style="font-size:0.78rem;color:#555;line-height:1.5;margin-top:4px">' + ev.detail + '</div>'
+      : '';
+    return '<div class="tf-entry">'
+      + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">'
+      + '<button class="tick-dot tick-' + ev.status + '" title="' + ev.status.toUpperCase() + '" aria-label="Status: ' + ev.status + '" style="flex-shrink:0"></button>'
+      + '<span style="font-size:0.64rem;color:#aaa">' + ev.timestamp + ' &middot; ' + ev.source + '</span>'
+      + '</div>'
+      + '<div style="font-size:0.83rem;font-weight:600;color:#1a0533">' + ev.headline + '</div>'
+      + detailHtml
+      + illusHtml
+      + '</div>';
+  }
+
+  function openTfEntry(idx) {
+    var ev = _feedData[idx];
+    if (!ev) return;
+    var t = document.getElementById('tfTitle');
+    if (t) t.textContent = 'Rate Entry — ' + ev.source;
+    var b = document.getElementById('tfBody');
+    if (b) b.innerHTML = _tfEntryHtml(ev);
+    document.getElementById('tfOverlay').classList.add('open');
+  }
+
+  function openTfList() {
+    var t = document.getElementById('tfTitle');
+    var b = document.getElementById('tfBody');
+    if (t) t.textContent = _feedData.length
+      ? 'Live Rates — ' + _feedIndustryLabel + ' (' + _feedData.length + ' entries)'
+      : 'Live Rates — ' + _feedIndustryLabel;
+    if (b) {
+      b.innerHTML = _feedData.length
+        ? _feedData.map(_tfEntryHtml).join('')
+        : '<div style="padding:32px 20px;text-align:center;color:#999;font-size:0.88rem">'
+          + '&#x2014; No live rate updates for <strong style="color:#1a0533">'
+          + _feedIndustryLabel + '</strong> yet.</div>';
+    }
+    document.getElementById('tfOverlay').classList.add('open');
+  }
+
+  function closeTfDialog() {
+    var el = document.getElementById('tfOverlay');
+    if (el) el.classList.remove('open');
+  }
+
+  window.openTfEntry  = openTfEntry;
+  window.openTfList   = openTfList;
+  window.closeTfDialog = closeTfDialog;
+
+  // Bind Live Rates label button via addEventListener (backup for inline onclick)
+  var _lrBtn = document.querySelector('.ticker-label-btn');
+  if (_lrBtn) _lrBtn.addEventListener('click', openTfList);
+
+  // ── Bottom tariff ticker — polls /api/tariff-feed every 10s ───────
   var _tickerCache = '';
   function loadTicker() {
     fetch('/api/tariff-feed', {credentials: 'same-origin'})
@@ -1763,39 +1940,57 @@ BASE = """<!DOCTYPE html>
         var inner = document.getElementById('tickerInner');
         var track = document.getElementById('tickerTrack');
         if (!inner) return;
+
         // Specific industry with no aggregator coverage → static notice, no scroll
         if (data.no_industry_coverage) {
           var lbl = data.industry_display_name || data.active_industry || 'this industry';
-          var html = '<span style="color:rgba(255,255,255,0.45);font-style:italic;padding-left:16px">'
-            + '— No live rate updates for ' + lbl + ' yet — coverage expanding.'
+          _feedIndustryLabel = lbl;
+          var noHtml = '<span style="color:rgba(255,255,255,0.45);font-style:italic;padding-left:16px">'
+            + '&#x2014; No live rate updates for ' + lbl + ' yet &mdash; coverage expanding.'
             + '</span>';
-          if (html === _tickerCache) return;
-          _tickerCache = html;
-          inner.innerHTML = html;
+          if (noHtml === _tickerCache) return;
+          _tickerCache = noHtml;
+          inner.innerHTML = noHtml;
           inner.style.animation = 'none';
+          _feedData = [];
           return;
         }
+
         if (!data.feed || !data.feed.length) return;
+        _feedData = data.feed;
+        _feedIndustryLabel = data.industry_display_name || data.active_industry || 'All Industries';
+
+        // Build one copy of ticker items (we'll double for seamless loop)
         var html = '';
-        data.feed.forEach(function(ev) {
-          html += '<span class="ticker-item">'
-            + '<span class="tick-badge tick-' + ev.status + '">' + ev.status.toUpperCase() + '</span>'
+        data.feed.forEach(function(ev, idx) {
+          html += '<span class="ticker-item" onclick="openTfEntry(' + idx + ')" title="Click for details">'
+            + '<button class="tick-dot tick-' + ev.status + '" title="' + ev.status.toUpperCase() + '" aria-label="Status: ' + ev.status + '"></button>'
             + ' ' + ev.headline
             + ' <span class="ticker-src">via ' + ev.source + '</span>'
-            + '</span><span class="ticker-sep" aria-hidden="true">·</span>';
+            + '</span><span class="ticker-sep" aria-hidden="true">&middot;</span>';
         });
+
         if (html === _tickerCache) return;
         _tickerCache = html;
-        inner.innerHTML = html;
-        // Set duration for ~55 px/s regardless of content length
+
+        // Double the content for seamless infinite loop
+        inner.innerHTML = html + html;
+        inner.offsetWidth; // force layout before measuring
+
         var trackW = track ? track.offsetWidth : Math.max(0, window.innerWidth - 260);
-        var innerW = inner.scrollWidth;
-        var dur = Math.round((trackW + innerW) / 55);
+        var singleW = Math.ceil(inner.scrollWidth / 2); // width of one copy
+        var dur = Math.max(20, Math.round(singleW / 25)); // ~25px/s, min 20s
+
+        document.documentElement.style.setProperty('--tk-to', '-' + singleW + 'px');
         inner.style.animation = 'none';
-        inner.offsetWidth; // force reflow to restart
+        inner.offsetWidth; // force reflow to restart animation
         inner.style.animation = 'ticker-scroll ' + dur + 's linear infinite';
       })
-      .catch(function() {});
+      .catch(function(err) {
+        var inner = document.getElementById('tickerInner');
+        if (inner && !inner.querySelector('.ticker-item'))
+          inner.innerHTML = '<span style="color:rgba(255,180,100,0.7);font-style:italic;padding-left:16px">&#9888; Feed temporarily unavailable — retrying</span>';
+      });
   }
   loadTicker();
   setInterval(loadTicker, 10000);
@@ -2325,6 +2520,33 @@ def action_logs_page():
         industry=industry,
         all_industries=get_industries(),
     )
+
+
+# ---------------------------------------------------------------------------
+# FTA AI chat endpoint
+# ---------------------------------------------------------------------------
+
+@app.route("/api/fta-chat", methods=["POST"])
+def api_fta_chat():
+    data    = request.get_json(force=True) or {}
+    message = data.get("message", "").strip()
+    if not message:
+        return jsonify({"reply": "Please enter a question."})
+    system = (
+        "You are an expert FTA (Free Trade Agreement) and trade compliance assistant "
+        "embedded in TradeNavigator AI, an Accenture platform. "
+        "Answer ONLY questions about: Free Trade Agreements, preferential tariffs, "
+        "Rules of Origin (RoO), tariff classifications (HS codes), duty optimisation, "
+        "trade compliance, customs procedures, and import/export regulations. "
+        "If asked about unrelated topics, briefly acknowledge and redirect to FTA topics. "
+        "Be concise, practical, and use plain language. Format lists with line breaks."
+    )
+    try:
+        reply = _run_ai_in_thread(system, message)
+        reply = _strip_reasoning(reply)
+    except Exception:
+        reply = "Sorry, I could not process your request right now. Please try again."
+    return jsonify({"reply": reply})
 
 
 # ---------------------------------------------------------------------------
@@ -2867,19 +3089,28 @@ def agent_fta_preferential():
     _shp_opt_str  = ", ".join(fta_data_source.SHIPMENT_ROO + fta_data_source.SHIPMENT_ROADMAP)
     _coo_cols_str = ", ".join(fta_data_source.COO_REQUIRED)
 
+    _up_body_style = '' if _panel_open else 'display:none'
+    _up_arrow      = '▼' if _panel_open else '▶'
     upload_section = (
-        f'<details {_panel_open} style="margin-bottom:16px;border-radius:10px;'
-        'box-shadow:0 2px 8px rgba(26,5,51,0.07);background:#fff;overflow:hidden">'
-        '<summary style="padding:12px 20px;font-size:0.8rem;font-weight:700;'
+        '<div id="upPanel" style="margin-bottom:16px;border-radius:10px;'
+        'box-shadow:0 4px 16px rgba(26,5,51,0.12);background:#fff;'
+        'border:1px solid rgba(161,0,255,0.13)">'
+        '<div onclick="(function(h){'
+        'var b=document.getElementById(\'upBody\');'
+        'var open=b.style.display===\'none\';'
+        'b.style.display=open?\'\':\'none\';'
+        'h.querySelector(\'.up-arr\').textContent=open?\'▼\':\'▶\';'
+        '})(this)" '
+        'style="padding:12px 20px;font-size:0.8rem;font-weight:700;'
         'text-transform:uppercase;letter-spacing:1px;'
-        'display:flex;align-items:center;gap:10px;cursor:pointer;list-style:none;'
+        'display:flex;align-items:center;gap:10px;cursor:pointer;'
         'user-select:none;border-bottom:1px solid #f0eaf8">'
         '\U0001f4c2 Data Source'
         f'<span style="margin-left:8px">{_src_badge}</span>'
-        '<span style="margin-left:auto;font-size:0.72rem;font-weight:400;'
-        'color:#A100FF;text-transform:none;letter-spacing:0">▼ upload real data</span>'
-        '</summary>'
-        '<div style="padding:16px 20px">'
+        f'<span class="up-arr" style="margin-left:auto;font-size:0.72rem;font-weight:400;'
+        f'color:#A100FF;text-transform:none;letter-spacing:0">{_up_arrow}</span>'
+        '</div>'
+        f'<div id="upBody" style="padding:16px 20px;{_up_body_style}">'
         + (_feedback if _feedback else "")
         + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:8px">'
         # ── Shipment upload ──
@@ -2946,7 +3177,7 @@ def agent_fta_preferential():
             '</div>'
             if not _is_empty else ""
         )
-        + '</div></details>'
+        + '</div></div>'
     )
 
     # ── KPI strip (4 cards) ──────────────────────────────────────────────
@@ -3040,7 +3271,7 @@ def agent_fta_preferential():
             f'${lane["eligible_value_m"]}M</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem">'
             f'${lane["claimed_value_m"]}M</td>'
-            f'<td style="padding:10px 12px;font-size:0.78rem;white-space:nowrap;color:#555">'
+            f'<td style="padding:10px 12px;font-size:0.78rem;color:#555">'
             f'<button class="rate-cell-btn" '
             f'data-src="{lane["rates_source"]}" data-mfn="{_rs_mfn}" '
             f'data-pref="{_rs_pref}" data-fta="{lane["fta_name"]}" '
@@ -3052,7 +3283,7 @@ def agent_fta_preferential():
             f' pref'
             f'<span class="rate-cell-info">&#x24D8;</span>'
             f'</button></td>'
-            f'<td style="padding:10px 12px;font-size:0.82rem;white-space:nowrap">'
+            f'<td style="padding:10px 12px;font-size:0.82rem">'
             f'<div style="background:#e8e0f0;border-radius:3px;height:6px;'
             f'width:80px;display:inline-block">'
             f'<div style="background:#A100FF;height:6px;border-radius:3px;'
@@ -3322,16 +3553,14 @@ def agent_fta_preferential():
         )
 
     roo_section = (
-        '<details style="margin-bottom:12px;border-radius:10px;'
-        'box-shadow:0 2px 8px rgba(26,5,51,0.07);background:#fff;overflow:hidden">'
+        '<details open style="margin-bottom:12px;border-radius:10px;'
+        'box-shadow:0 2px 8px rgba(26,5,51,0.07);background:#fff">'
         '<summary style="padding:14px 20px;font-size:0.8rem;font-weight:700;'
         'text-transform:uppercase;letter-spacing:1px;border-bottom:1px solid #f0eaf8;'
         'display:flex;align-items:center;gap:8px;cursor:pointer;list-style:none;'
-        'user-select:none">'
+        'user-select:none;color:#1a0533">'
         '\U0001f4cb RoO / Preference Assessment'
         f'{_sap_badge("SAP GTS")}'
-        '<span style="font-size:0.72rem;font-weight:400;'
-        'color:#A100FF;text-transform:none;letter-spacing:0">▼ expand</span>'
         '</summary>'
         + roo_body + _roo_footer
         + '</details>'
@@ -3377,16 +3606,14 @@ def agent_fta_preferential():
         )
 
     roadmap_section = (
-        '<details style="margin-bottom:12px;border-radius:10px;'
-        'box-shadow:0 2px 8px rgba(26,5,51,0.07);background:#fff;overflow:hidden">'
+        '<details open style="margin-bottom:12px;border-radius:10px;'
+        'box-shadow:0 2px 8px rgba(26,5,51,0.07);background:#fff">'
         '<summary style="padding:14px 20px;font-size:0.8rem;font-weight:700;'
         'text-transform:uppercase;letter-spacing:1px;border-bottom:1px solid #f0eaf8;'
         'display:flex;align-items:center;gap:8px;cursor:pointer;list-style:none;'
-        'user-select:none">'
+        'user-select:none;color:#1a0533">'
         '\U0001f5fa Qualification Roadmap — Under-Utilised Lanes'
         f'{_sap_badge("SAP GTS")}'
-        '<span style="font-size:0.72rem;font-weight:400;'
-        'color:#A100FF;text-transform:none;letter-spacing:0">▼ expand</span>'
         '</summary>'
         '<div style="overflow-x:auto;max-height:280px;overflow-y:auto">'
         '<table style="width:100%;border-collapse:collapse">'
@@ -3473,10 +3700,11 @@ def agent_fta_preferential():
     # ── Compose page ─────────────────────────────────────────────────────
     content = (
         header_html + upload_section + kpi_html
-        + '<div style="display:flex;gap:20px;align-items:flex-start;margin-bottom:20px">'
-        + f'<div style="flex:3;min-width:0">{lane_section}{shipment_section}</div>'
-        + f'<div style="flex:2;min-width:0">{coo_section}</div>'
+        + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">'
+        + lane_section
+        + coo_section
         + '</div>'
+        + '<div style="margin-bottom:20px">' + shipment_section + '</div>'
         + roo_section
         + roadmap_section
         + prov_modal_html
@@ -3930,6 +4158,33 @@ function escAttr(s) { return escH(s); }
 </script>
 """
 
+    # ── Server-side ticker pre-render (bypasses any client-side fetch issues) ──
+    _ticker_init = ''
+    try:
+        _t_raw = _aggregator.recent_raw(_agg_max_entries) if _aggregator is not None else []
+        if not is_all:
+            _t_raw = [r for r in _t_raw if classify_shipment({"hs_code": r.hs6}, industry)]
+        _t_feed = (
+            [_agg_to_feed_entry(r) for r in _t_raw]
+            if _t_raw else (get_tariff_feed() if is_all else [])
+        )
+        if _t_feed:
+            _t_parts = []
+            for _ti, _tev in enumerate(_t_feed):
+                _ts = _tev.get('status') or 'cleared'
+                _t_parts.append(
+                    f'<span class="ticker-item" onclick="openTfEntry({_ti})" title="Click for details">'
+                    f'<button class="tick-dot tick-{_ts}" title="{_ts.upper()}" aria-label="Status: {_ts}"></button>'
+                    f' {_tev.get("headline", "")}'
+                    f' <span class="ticker-src">via {_tev.get("source", "")}</span>'
+                    f'</span><span class="ticker-sep" aria-hidden="true">&middot;</span>'
+                )
+            _single = ''.join(_t_parts)
+            _ticker_init = _single + _single  # doubled for seamless CSS animation loop
+    except Exception:
+        pass  # feed unavailable — ticker shows "Loading..." default
+
+    _extra_kw = {"ticker_initial": _ticker_init} if _ticker_init else {}
     return render_template_string(
         BASE,
         title="FTA & Preferential Trade Agent",
@@ -3939,6 +4194,7 @@ function escAttr(s) { return escH(s); }
         scripts=scripts,
         industry=industry,
         all_industries=get_industries(),
+        **_extra_kw,
     )
 
 

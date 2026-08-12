@@ -78,6 +78,7 @@ def get_tariff_feed() -> list[dict]:
             "detail": detail,
             "status": status,  # "cleared", "issued", "pending"
             "source": random.choice(_TARIFF_SOURCES)["name"],
+            "illustrative": True,
         })
     feed.sort(key=lambda x: x["timestamp"], reverse=True)
     return feed[:8]  # Return latest 8 events

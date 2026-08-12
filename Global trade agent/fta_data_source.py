@@ -70,6 +70,29 @@ _ERP_SHIPMENT_MAP: dict[str, str] = {
     "VDECL_DEADLINE":       "deadline",
     "POO_STATUS":           "status",
     "LANE":                 "lane",
+    # ── Non-SAP / consultant-export aliases ───────────────────────────────────
+    # Column names found in BI reports, custom ERP extracts, and non-SAP TM
+    # exports.  Map to the same snake_case targets as the SAP equivalents above.
+    # Text status values (e.g. "Claimed", "Unclaimed") are normalised to E/U/N
+    # by _normalise_coded_values() which runs immediately after _rename_erp_cols().
+    "shipment_no":       "shipment_id",
+    "description":       "product",
+    "hs":                "hs_code",
+    "from_country":      "origin",
+    "to_country":        "destination",
+    "declared_value":    "value",
+    "trade_deal":        "fta_name",
+    "claim_status":      "claimed_status",
+    "standard_duty":     "mfn_rate",
+    "mfn_duty":          "mfn_rate",
+    "preferential_duty": "preferential_rate",
+    "pref_duty":         "preferential_rate",
+    "regional_content":  "rvc_pct",
+    "content_threshold": "roo_threshold_pct",
+    "roo_result":        "roo_status",
+    "vendor":            "supplier_name",
+    "bom_content":       "bom_regional_content",
+    "ccy":               "currency",
 }
 
 _ERP_COO_MAP: dict[str, str] = {
@@ -262,8 +285,12 @@ def _normalise_coded_values(
 ) -> "tuple[pd.DataFrame, list[str], list[str]]":
     """
     Normalise all coded SAP fields in a shipment DataFrame in-place (copy):
-      PREF_STATUS  E / U / N
-      ROO_STATUS   Q / M / F
+      PREF_STATUS / claimed_status  →  E / U / N
+      ROO_STATUS  / roo_status      →  Q / M / F
+
+    Handles both SAP column names (PREF_STATUS, ROO_STATUS) and their
+    snake_case equivalents (claimed_status, roo_status) so that alias-mapped
+    uploads are normalised the same way as SAP-native ones.
 
     Returns (df_normalised, info_msgs, warning_msgs).
     """
@@ -281,9 +308,29 @@ def _normalise_coded_values(
         )
         infos.extend(i);    warnings.extend(w)
 
+    # Snake_case variant — present after alias resolution (_rename_erp_cols already ran)
+    if "claimed_status" in df.columns:
+        df, i, w = _map_coded_col(
+            df, "claimed_status",
+            _fm.PREF_STATUS_VALUES, {"E", "U", "N"},
+            fallback="N",
+            valid_desc="E (claimed), U (unclaimed), N (not-eligible)",
+        )
+        infos.extend(i);    warnings.extend(w)
+
     if "ROO_STATUS" in df.columns:
         df, i, w = _map_coded_col(
             df, "ROO_STATUS",
+            _fm.ROO_STATUS_VALUES, {"Q", "M", "F"},
+            fallback="F",
+            valid_desc="Q (qualified), M (near-miss), F (fail)",
+        )
+        infos.extend(i);    warnings.extend(w)
+
+    # Snake_case variant
+    if "roo_status" in df.columns:
+        df, i, w = _map_coded_col(
+            df, "roo_status",
             _fm.ROO_STATUS_VALUES, {"Q", "M", "F"},
             fallback="F",
             valid_desc="Q (qualified), M (near-miss), F (fail)",
@@ -923,10 +970,14 @@ def upload_shipment_data(file_bytes: bytes, filename: str) -> dict:
 
     df = _normalise_cols(raw_df)
     df = _rename_erp_cols(df, _ERP_SHIPMENT_MAP)   # ERP→snake_case boundary
+    # Normalise coded values AFTER alias resolution so text status values like
+    # "Claimed"/"Unclaimed" are translated to E/U/N before validation fires.
+    df, norm_infos, norm_warns = _normalise_coded_values(df)
     # Blank/NaN fta_name (ERP rows with no FTA) → "N/A" so groupby retains the lane
     if "fta_name" in df.columns:
         df["fta_name"] = df["fta_name"].fillna("N/A").replace("", "N/A")
     ok, errors, warnings, has_roo, has_roadmap = _validate_shipment(df)
+    warnings = norm_infos + norm_warns + warnings
 
     if ok:
         with _lock:
@@ -994,10 +1045,16 @@ def parse_for_mapping(file_bytes: bytes, filename: str):
 
 def is_native_format(columns: list[str]) -> bool:
     """
-    True when every column in SHIPMENT_REQUIRED is already present —
-    i.e. the file already uses SAP field names and needs no mapping dialog.
+    True when the file can be loaded by upload_shipment_data without a mapping dialog:
+    - Already in internal snake_case schema (every SHIPMENT_REQUIRED column present), OR
+    - SAP/ERP column names (upload_shipment_data calls _rename_erp_cols internally).
     """
-    return all(c in columns for c in SHIPMENT_REQUIRED)
+    # Internal snake_case format
+    if all(c in columns for c in SHIPMENT_REQUIRED):
+        return True
+    # SAP ERP format — _rename_erp_cols maps these to snake_case at the boundary
+    _SAP_REQUIRED = {"TOR_ID", "PRODUCT_TEXT", "CCNGN", "CTYDP", "CTYAR", "CUSVAL", "PREF_STATUS", "ENTRY_DATE"}
+    return _SAP_REQUIRED.issubset(set(columns))
 
 
 def apply_mapping_and_load_shipments(
@@ -1015,8 +1072,15 @@ def apply_mapping_and_load_shipments(
     df_renamed = df.rename(columns=rename)
     df_renamed  = _normalise_cols(df_renamed)
 
-    # Normalise coded field values BEFORE validation so validators see SAP codes.
+    # Normalise coded field values BEFORE the ERP→snake_case rename so that
+    # _normalise_coded_values can find "PREF_STATUS" (SAP name).
     df_renamed, norm_infos, norm_warns = _normalise_coded_values(df_renamed)
+
+    # Translate SAP column names → internal snake_case so _validate_shipment
+    # and all downstream derivation functions see the expected schema.
+    df_renamed = _rename_erp_cols(df_renamed, _ERP_SHIPMENT_MAP)
+    if "fta_name" in df_renamed.columns:
+        df_renamed["fta_name"] = df_renamed["fta_name"].fillna("N/A").replace("", "N/A")
 
     ok, errors, warnings, has_roo, has_roadmap = _validate_shipment(df_renamed)
     # Prepend normalisation context so users know what was auto-translated.
