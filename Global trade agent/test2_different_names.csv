@@ -1,0 +1,16 @@
+shipment_no,description,hs_code,from_country,to_country,declared_value,currency,trade_deal,standard_duty,preferential_duty,claim_status,regional_content,content_threshold,roo_result,vendor,bom_content,entry_date
+SHP-2026-001,Automotive Brake Pads,8708.10.10,MX,US,92400,USD,USMCA,2.5,0.0,Claimed,74.2,62.5,Qualified,Monterrey Brake Systems,73.8,2026-01-10
+SHP-2026-002,Electronic Control Unit,8537.10.90,MX,US,187500,USD,USMCA,2.5,0.0,Unclaimed,55.1,62.5,Near-Miss,Chihuahua Electronics SA,54.8,2026-01-15
+SHP-2026-003,Steel Coil HRC,7208.39.00,CA,US,64200,USD,CUSMA,3.0,0.0,Claimed,88.0,50.0,Qualified,Ontario Steel Inc,87.5,2026-01-18
+SHP-2026-004,Cotton T-Shirts,6109.10.00,VN,EU,31100,EUR,EVFTA,12.0,0.0,Unclaimed,38.4,40.0,Near-Miss,Hanoi Garment Co,38.0,2026-01-20
+SHP-2026-005,Polyethylene Resin,3901.10.00,CA,US,118300,USD,CUSMA,3.0,0.0,Claimed,92.1,50.0,Qualified,Nova Chemicals Calgary,91.8,2026-01-22
+SHP-2026-006,Diesel Engine Parts,8409.91.00,MX,US,243000,USD,USMCA,2.5,0.0,Claimed,69.8,62.5,Qualified,TREMEC Queretaro,69.3,2026-01-25
+SHP-2026-007,LCD Panels,9013.80.90,KR,US,198700,USD,KORUS,5.0,0.0,Unclaimed,47.3,45.0,Qualified,Samsung Display Seoul,47.0,2026-01-28
+SHP-2026-008,Pharmaceutical APIs,2941.90.00,VN,EU,67400,EUR,EVFTA,12.0,0.0,Claimed,91.0,40.0,Qualified,Hanoi Pharma JSC,90.5,2026-02-01
+SHP-2026-009,Aluminum Extrusions,7610.10.00,CA,US,44800,USD,CUSMA,3.0,0.0,Unclaimed,78.2,50.0,Qualified,Aluminerie Alouette,77.9,2026-02-05
+SHP-2026-010,Rubber Tyres,4011.10.00,MX,US,36500,USD,USMCA,2.5,0.0,Unclaimed,58.4,62.5,Near-Miss,Continental Guanajuato,58.0,2026-02-08
+SHP-2026-011,PCB Assemblies,8534.00.00,KR,US,312000,USD,KORUS,6.5,0.0,Claimed,82.1,45.0,Qualified,Seoul Electronics Co,81.7,2026-02-10
+SHP-2026-012,Auto Wiring Harness,8544.30.00,MX,US,156800,USD,USMCA,2.5,0.0,Unclaimed,61.3,62.5,Near-Miss,Yazaki Mexico,61.0,2026-02-12
+SHP-2026-013,Rare Earth Magnets,8505.11.00,CN,US,89200,USD,N/A,5.0,5.0,Not Eligible,22.1,40.0,Fail,China Magnetics Ltd,21.8,2026-02-14
+SHP-2026-014,Ceramic Tiles,6907.21.00,VN,EU,28600,EUR,EVFTA,12.0,0.0,Not Eligible,31.5,40.0,Fail,Viglacera Hanoi,31.2,2026-02-16
+SHP-2026-015,Cotton Denim Fabric,5209.42.00,VN,EU,19400,EUR,EVFTA,12.0,0.0,Unclaimed,42.3,40.0,Qualified,Phu Bai Textile,41.9,2026-02-18

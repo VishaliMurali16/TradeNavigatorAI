@@ -1,3 +1,12 @@
 flask>=3.0.0
 python-dotenv>=1.0.0
 airefinery-sdk
+
+# Aggregator Agent dependencies
+pydantic>=2.0.0
+pycountry>=22.3.5
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+apscheduler>=3.10.0
+requests>=2.31.0
+pyyaml>=6.0

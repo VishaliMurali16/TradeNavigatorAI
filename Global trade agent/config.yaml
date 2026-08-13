@@ -14,3 +14,102 @@ super_agents: []
 orchestrator:
   agent_list:
     - agent_name: Trade Navigator Agent
+
+# --- Aggregator Agent configuration -------------------------------------
+aggregator:
+  # Feed integration with app.py /api/tariff-feed
+  feed:
+    enabled: true        # master switch — false reverts to simulator instantly
+    max_entries: 25      # how many recent rates the feed shows
+
+  # Connector definitions. Each connector reads its own block by name.
+  sources:
+    us_hts:
+      enabled: true
+      base_url: "https://hts.usitc.gov/reststop"
+      # search endpoint pattern: {base_url}/search?keyword={hs_code}
+      timeout_seconds: 20
+      authoritative_for: ["US"]      # ISO alpha-2 destinations this source owns
+
+    wits:
+      enabled: true
+      base_url: "https://wits.worldbank.org/API/V1"
+      timeout_seconds: 30
+      authoritative_for: []          # global aggregator — authoritative for nothing
+
+    eu_taric:
+      enabled: false                 # stub in Phase 1
+      base_url: ""                   # TODO: confirm official TARIC data endpoint
+      timeout_seconds: 30
+      authoritative_for: ["EU"]
+
+    macmap:
+      enabled: false                 # stub
+      base_url: ""
+      timeout_seconds: 30
+      authoritative_for: []
+
+    sap_gts:
+      enabled: false                 # stub — client-licensed, production only
+      base_url: ""
+      timeout_seconds: 30
+      authoritative_for: []          # when present, highest precedence (client SOR)
+
+  # Precedence: national authoritative source for the destination beats a global
+  # aggregator. Higher number = higher precedence. Read by the reconciler.
+  precedence:
+    sap_gts: 100      # client's own system of record wins when available
+    us_hts: 90
+    eu_taric: 90
+    macmap: 50
+    wits: 10          # fallback
+
+  # Confidence scoring bands (reconciler reads these; keep in sync with
+  # CanonicalRate.confidence_tier thresholds in models.py)
+  confidence:
+    authoritative_present: 0.90    # authoritative source answered (alone or corroborated)
+    non_authoritative_agree: 0.75  # multiple non-auth sources agree; auth unreachable
+    fallback_only: 0.50            # single fallback/global source; auth unreachable
+    sources_disagree: 0.45         # any conflict between sources
+
+  # SQLite rate store
+  store:
+    db_path: "aggregator/data/rates.db"
+
+  # Scheduler / freshness
+  refresh:
+    interval_hours: 24            # re-pull lanes daily to detect changes
+    staleness_threshold_days: 7   # mark CanonicalRate.is_stale beyond this
+
+    # Lanes refreshed by the scheduler.
+    # US HTS only — WITS endpoint blocked (403) from corporate network.
+    # Do not add WITS-only or non-US destinations until access is confirmed.
+    lanes:
+      - hs_code: "8471.30"     # Laptops / portable computers
+        origin:  "VN"
+        destination: "US"
+      - hs_code: "8471.30"     # Laptops / portable computers
+        origin:  "CN"
+        destination: "US"
+      - hs_code: "0406.90"     # Cheese (high MFN, KORUS preferential)
+        origin:  "KR"
+        destination: "US"
+
+# --- Tariff Shock & Resilience Agent -------------------------------------------
+tariff_shock:
+  # Master switch — identical rollback pattern to aggregator.feed.enabled.
+  # false: _tariff_shock_agent stays None; tab renders inactive placeholder
+  #        without requiring any registry-status change.
+  # true:  agent subscribes to the scheduler and quantifies exposure on each
+  #        rate-change event.
+  enabled: true
+
+  # ILLUSTRATIVE annual shipment values in USD.
+  # Keys: "{hs6}_{origin}_{destination}" — must match aggregator.refresh.lanes.
+  # *** REPLACE with live ERP feed before production use. ***
+  # These numbers exist solely to demonstrate the exposure calculation loop;
+  # they have no business validity and must be labeled as such in all output.
+  stub_volumes:
+    "847130_VN_US": 5000000    # Laptops — Vietnam to US  (ILLUSTRATIVE)
+    "847130_CN_US": 12000000   # Laptops — China to US    (ILLUSTRATIVE)
+    "040690_KR_US": 800000     # Cheese  — Korea to US    (ILLUSTRATIVE)

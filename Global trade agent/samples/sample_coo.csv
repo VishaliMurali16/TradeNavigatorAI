@@ -1,0 +1,4 @@
+supplier,lane,request_date,deadline,status
+Seoul Dairy Co,KR → US,2026-07-05,2026-08-07,overdue
+Busan Foods Ltd,KR → US,2026-07-12,2026-08-12,pending
+Hanoi Tech JSC,VN → US,2026-07-18,2026-08-18,received

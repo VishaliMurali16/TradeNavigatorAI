@@ -1,0 +1,11 @@
+shipment_no,description,hs,origin,destination,country_of_origin,value,ccy,trade_deal,mfn_duty,pref_duty,claim_status,regional_content,content_threshold,roo_result,vendor,bom_content,entry_date
+SHP-2024-001,Automotive Brake Pads,8708.10.10,MX,US,MX,48500,USD,USMCA,2.5,0.0,E,72.3,62.5,Q,Monterrey Auto Parts SA,71.8,20240315
+SHP-2024-002,Electronic Control Unit,8537.10.90,DE,SG,DE,126000,EUR,EUSFTA,3.7,0.0,U,54.1,55.0,M,Bosch GmbH Hamburg,53.2,20240318
+SHP-2024-003,Steel Coil HRC,7208.39.00,JP,KR,JP,89400,USD,RCEP,3.0,0.5,E,85.0,40.0,Q,Nippon Steel Corporation,84.5,20240320
+SHP-2024-004,Cotton T-Shirts,6109.10.00,VN,US,VN,22100,USD,VNCPPTPP,12.0,0.0,N,38.2,55.0,F,Hanoi Garment Co,37.9,20240321
+SHP-2024-005,Polyethylene Resin,3901.10.00,SA,IN,SA,67800,USD,GCC-India,5.5,2.0,U,91.0,35.0,Q,SABIC Riyadh,90.3,20240323
+SHP-2024-006,Diesel Engine Parts,8409.91.00,MX,US,MX,155000,USD,USMCA,2.5,0.0,E,68.4,62.5,Q,TREMEC Queretaro,67.9,20240324
+SHP-2024-007,LCD Panels,9013.80.90,TW,US,TW,243000,USD,None,5.0,5.0,N,43.0,55.0,F,AUO Corporation,42.5,20240325
+SHP-2024-008,Pharmaceutical APIs,2941.90.00,IN,EU,IN,78900,EUR,EUFTA,0.0,0.0,E,92.1,50.0,Q,Sun Pharma Mumbai,91.6,20240326
+SHP-2024-009,Aluminum Extrusions,7610.10.00,CA,US,CA,34200,USD,CUSMA,3.0,0.0,U,76.5,55.0,Q,Aluminerie Alouette,76.1,20240327
+SHP-2024-010,Rubber Tyres,4011.10.00,TH,AU,TH,41500,USD,TAFTA,5.0,0.0,E,66.8,40.0,Q,Thai Bridgestone,66.2,20240328
