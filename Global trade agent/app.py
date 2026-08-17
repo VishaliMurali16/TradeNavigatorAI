@@ -1395,58 +1395,6 @@ body {
     .main-content { padding-top: calc(52px + 20px); }
 }
 
-/* ── Industry lens pill & picker ─────────────────────────────── */
-.topbar { gap: 8px; }
-.industry-pill-wrap {
-    position: relative;
-    display: flex; align-items: center;
-    margin-right: 4px;
-}
-.industry-pill {
-    display: flex; align-items: center; gap: 6px;
-    padding: 6px 14px;
-    background: rgba(161,0,255,0.15);
-    border: 1.5px solid rgba(161,0,255,0.45);
-    border-radius: 999px;
-    color: #fff;
-    font-size: 0.78rem; font-weight: 600;
-    cursor: pointer; white-space: nowrap;
-    transition: background 0.15s, border-color 0.15s;
-}
-.industry-pill:hover {
-    background: rgba(161,0,255,0.30);
-    border-color: #A100FF;
-}
-.industry-picker {
-    position: absolute;
-    top: calc(100% + 10px); left: 0;
-    background: #fff; border-radius: 10px;
-    box-shadow: 0 8px 32px rgba(26,5,51,0.18), 0 2px 8px rgba(0,0,0,0.08);
-    min-width: 260px; overflow: hidden;
-    z-index: 300;
-    opacity: 0; pointer-events: none;
-    transform: translateY(-6px);
-    transition: opacity 0.15s, transform 0.15s;
-}
-.industry-picker.open { opacity: 1; pointer-events: auto; transform: translateY(0); }
-.ip-header {
-    padding: 10px 16px 8px;
-    font-size: 0.63rem; font-weight: 700;
-    text-transform: uppercase; letter-spacing: 1.5px;
-    color: #A100FF;
-    border-bottom: 1px solid #f0eaf8;
-}
-.ip-item {
-    display: block; padding: 10px 16px;
-    text-decoration: none; color: #1a0533;
-    border-bottom: 1px solid #f9f6ff;
-    transition: background 0.12s;
-}
-.ip-item:last-child { border-bottom: 0; }
-.ip-item:hover { background: rgba(161,0,255,0.06); }
-.ip-item.active { background: rgba(161,0,255,0.09); }
-.ip-name { font-size: 0.83rem; font-weight: 600; }
-.ip-desc { font-size: 0.71rem; color: #888; margin-top: 2px; }
 .industry-context-bar {
     display: flex; align-items: center; gap: 8px;
     padding: 9px 16px;
@@ -1524,16 +1472,6 @@ body {
 }
 .rate-cell-btn:hover { text-decoration: underline dotted #A100FF; }
 .rate-cell-info { font-size: 0.65rem; color: rgba(161,0,255,0.6); }
-
-/* ── Industry pill (read-only topbar) ────────────────────── */
-a.industry-pill {
-    cursor: pointer;
-    text-decoration: none;
-}
-a.industry-pill:hover {
-    background: rgba(161,0,255,0.30);
-    border-color: #A100FF;
-}
 
 /* ── Settings industry picker ────────────────────────────── */
 .settings-section { margin-bottom: 28px; }
@@ -1614,11 +1552,6 @@ BASE = """<!DOCTYPE html>
 <body>
 <!-- ── Workspace top bar ──────────────────────────────────────── -->
 <div class="topbar">
-  <div class="industry-pill-wrap">
-    <a href="/settings#industry" class="industry-pill" title="Change industry lens in Settings" aria-label="Active industry: {{ industry.display_name }}">
-      🏭 {{ industry.display_name }}
-    </a>
-  </div>
   <div class="topbar-avatar-wrap">
     <button class="topbar-avatar" id="workspaceBtn" aria-label="Workspace">
       <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -1833,7 +1766,7 @@ BASE = """<!DOCTYPE html>
 
   // Rate source info dialog
   var _RS_MSG = {
-    'aggregator':         'Both MFN and FTA preferential rates sourced live from the USITC Harmonized Tariff Schedule via a configured connector. Rates reflect today\'s query.',
+    'aggregator':         "Both MFN and FTA preferential rates sourced live from the USITC Harmonized Tariff Schedule via a configured connector. Rates reflect today's query.",
     'aggregator_mfn_only':'MFN rate sourced live from the USITC HTS. No FTA preferential rate is available — either no trade agreement covers this origin/destination pair, or the lane is outside connector scope. Savings shown as — (uncomputable without a preferential rate).',
     'no_aggregator_data': 'No live rate data was returned for this lane. The aggregator connector found no matching schedule entry. Rates are unavailable until a connector is configured for this destination.',
     'upload':             'MFN and preferential rates come from your uploaded file (columns MFN_RATE / PREF_RATE). These values are not cross-checked against a live tariff schedule.',
@@ -2526,26 +2459,162 @@ def action_logs_page():
 # FTA AI chat endpoint
 # ---------------------------------------------------------------------------
 
+def _build_fta_chat_context() -> str:
+    """
+    Assemble a compact plain-text snapshot of current dashboard data for the
+    FTA chatbot system prompt.  Caps lane list at 6 rows.  Returns a fallback
+    notice on any error so the chatbot degrades gracefully.
+    """
+    try:
+        kpis  = fta_data_source.get_fta_kpis()
+        lanes = fta_data_source.get_fta_lanes()
+        ships = fta_data_source.get_fta_shipments()
+        coos  = fta_data_source.get_coo_requests()
+        src   = fta_data_source.get_source_info()
+    except Exception:
+        return "(Dashboard data temporarily unavailable — use general knowledge only.)"
+
+    if src.get("shipment_mode") != "uploaded":
+        return (
+            "No shipment data uploaded yet — dashboard is in demo mode. "
+            "For data-specific questions, advise the user to upload their FTA shipment "
+            "data first. You can still answer general FTA knowledge questions."
+        )
+
+    period = kpis.get("period_label", "Uploaded data")
+    total  = len(ships)
+
+    # Claimed-status breakdown (E = eligible/claimed, U = unclaimed, N = not eligible)
+    n_e = sum(1 for s in ships if s.get("claimed_status") == "E")
+    n_u = sum(1 for s in ships if s.get("claimed_status") == "U")
+    n_n = sum(1 for s in ships if s.get("claimed_status") == "N")
+
+    # RoO breakdown derived per shipment row
+    has_roo = src.get("has_roo", False)
+    if has_roo:
+        roo_q = sum(1 for s in ships if s.get("roo_status") == "Q")
+        roo_m = sum(1 for s in ships if s.get("roo_status") == "M")
+        roo_f = sum(1 for s in ships if s.get("roo_status") == "F")
+        roo_str = f"{roo_q} Qualified, {roo_m} Near-Miss, {roo_f} Fail"
+    else:
+        roo_str = "RVC columns not in uploaded data (RoO thresholds unavailable)"
+
+    # CoO pipeline breakdown
+    coo_counts: dict = {"OVERDUE": 0, "PENDING": 0, "RECEIVED": 0, "VALIDATED": 0}
+    for c in coos:
+        st = c.get("status", "")
+        if st in coo_counts:
+            coo_counts[st] += 1
+
+    # Top 6 lanes by unclaimed savings
+    top_lanes = sorted(
+        lanes,
+        key=lambda ln: float(ln.get("unclaimed_savings_k") or 0),
+        reverse=True,
+    )[:6]
+    lane_lines = [
+        (
+            f"  - {ln.get('fta_name', '?')} | {ln.get('origin', '?')}"
+            f" -> {ln.get('destination', '?')}"
+            f" | eligible ${float(ln.get('eligible_value_m') or 0):.2f}M"
+            f" | claimed ${float(ln.get('claimed_value_m') or 0):.2f}M"
+            f" | util {float(ln.get('utilization_pct') or 0):.1f}%"
+            f" | unclaimed ${float(ln.get('unclaimed_savings_k') or 0):.1f}K"
+        )
+        for ln in top_lanes
+    ]
+
+    ctx = [
+        f"Period: {period} | Shipments loaded: {total}",
+        "Dashboard KPIs:",
+        f"  - FTA utilization rate: {float(kpis.get('utilization_pct') or 0):.1f}%",
+        f"  - Unclaimed savings opportunity: ${float(kpis.get('unclaimed_opportunity_m') or 0):.3f}M",
+        f"  - CoOs outstanding: {kpis.get('coo_outstanding', 0)}",
+        f"Shipment breakdown: {n_e} claimed/eligible (E) | {n_u} unclaimed (U) | {n_n} not eligible (N)",
+        f"RoO assessments: {roo_str}",
+        (
+            f"CoO requests: {coo_counts['OVERDUE']} overdue"
+            f" | {coo_counts['PENDING']} pending"
+            f" | {coo_counts['RECEIVED']} received"
+            f" | {coo_counts['VALIDATED']} validated"
+        ),
+    ]
+    if lane_lines:
+        ctx.append("Lanes sorted by unclaimed savings (highest first):")
+        ctx.extend(lane_lines)
+    else:
+        ctx.append("Lanes: none derived yet.")
+
+    return "\n".join(ctx)
+
+
 @app.route("/api/fta-chat", methods=["POST"])
 def api_fta_chat():
     data    = request.get_json(force=True) or {}
     message = data.get("message", "").strip()
     if not message:
         return jsonify({"reply": "Please enter a question."})
+
+    # ── Build current-data context for this request ───────────────────────────
+    dashboard_ctx = _build_fta_chat_context()
+
+    # ── System prompt ─────────────────────────────────────────────────────────
     system = (
-        "You are an expert FTA (Free Trade Agreement) and trade compliance assistant "
-        "embedded in TradeNavigator AI, an Accenture platform. "
-        "Answer ONLY questions about: Free Trade Agreements, preferential tariffs, "
-        "Rules of Origin (RoO), tariff classifications (HS codes), duty optimisation, "
-        "trade compliance, customs procedures, and import/export regulations. "
-        "If asked about unrelated topics, briefly acknowledge and redirect to FTA topics. "
-        "Be concise, practical, and use plain language. Format lists with line breaks."
+        "You are the FTA Advisor inside TradeNavigator AI, an Accenture"
+        " trade-intelligence platform. You are a specialist in Free Trade"
+        " Agreements and preferential-trade compliance.\n\n"
+        "YOUR EXPERTISE:\n"
+        "- FTA agreements and tariff schedules: USMCA/CUSMA, EVFTA, RCEP, KORUS,"
+        "  CPTPP, CAFTA-DR, AUSFTA, GSP, and major bilateral US and EU FTAs\n"
+        "- Rules of Origin: regional value content (RVC/QVC), tariff-shift (CTH/CTSH),"
+        "  substantial transformation, wholly-obtained, cumulation, de minimis,"
+        "  product-specific rules (PSRs), and how to close compliance gaps\n"
+        "- Duty optimisation: MFN vs preferential rates, duty savings calculation,"
+        "  retroactive/prior-period FTA claims, first-sale valuation, tariff engineering\n"
+        "- Certificates of Origin and Proof of Origin: USMCA self-certification, EUR.1,"
+        "  Form AK, back-to-back COOs, approved-exporter schemes, supplier declarations,"
+        "  documentation timelines and retention requirements\n"
+        "- HS tariff classification as it relates to FTA eligibility, chapter notes,"
+        "  advance classification rulings, tariff-heading change rules\n"
+        "- Trade compliance: customs entry, binding rulings, Section 301 / 232 / AD / CVD"
+        "  remedies and their interaction with FTA preferences, audit risk\n"
+        "- Dashboard metrics: utilization rate, unclaimed opportunity, near-miss products,"
+        "  CoO pipeline status, RoO qualification by product, lane-level savings\n\n"
+        "CURRENT DASHBOARD DATA (use these exact figures for any data question):\n"
+        f"{dashboard_ctx}\n\n"
+        "RULES YOU MUST FOLLOW:\n"
+        "1. SCOPE: You answer ONLY questions about FTAs, preferential trade, customs"
+        "   duties, rules of origin, HS codes, trade compliance, and the dashboard"
+        "   data above. If the user asks about anything else — coding, general knowledge,"
+        "   news, weather, opinions, or topics unrelated to trade — respond with:\n"
+        "   I'm focused on FTA and preferential trade topics. I can help with questions"
+        "   about trade agreements, rules of origin, duty savings, or the data on this"
+        "   dashboard. What would you like to know?\n"
+        "   Redirect politely every time; do not answer off-topic questions.\n"
+        "2. DATA ACCURACY: When answering about the user's dashboard, use ONLY the"
+        "   numbers from CURRENT DASHBOARD DATA. Never invent figures. If a specific"
+        "   detail is absent from the data, say so clearly.\n"
+        "3. DEPTH: Give accurate, practical answers. Explain the why, not just the what."
+        "   Cite specific agreement names, article numbers, or rule types where helpful.\n"
+        "4. FORMAT: Plain text with line breaks. Use - prefix for bullet lists."
+        "   Do not use markdown bold or italic markers. Keep responses focused.\n"
+        "5. NO REASONING OUTPUT: Respond directly. Do not emit thinking steps or"
+        "   chain-of-thought text."
     )
+
+    # ── Call LLM ──────────────────────────────────────────────────────────────
     try:
         reply = _run_ai_in_thread(system, message)
         reply = _strip_reasoning(reply)
+        if not reply:
+            raise ValueError("empty reply from LLM")
     except Exception:
-        reply = "Sorry, I could not process your request right now. Please try again."
+        reply = (
+            "I'm having trouble reaching the AI service right now. "
+            "For a quick reference: check the Unclaimed Savings column in the"
+            " lane table for your highest-value FTA opportunities, or try again"
+            " in a moment."
+        )
     return jsonify({"reply": reply})
 
 
