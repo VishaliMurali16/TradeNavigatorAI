@@ -133,6 +133,46 @@ class DemoConnector(BaseConnector):
                 source="Demo HTS", fetched_at=now,
             )]
 
+        # ── Dell accessory lanes — rates verified against the live USITC HTS API ──
+        # HS 4202.12 KR->US  MFN 5.7%,  KORUS preferential 0.0%  (Laptop Carry Case)
+        if hs6 == "420212" and o == "KR" and d == "US":
+            return [RawRate(
+                hs_code="420212", origin="KR", destination="US",
+                effective_date=effective_date,
+                mfn_rate=5.7,
+                preferential_rate=0.0, applicable_fta="KORUS",
+                source="Demo HTS", fetched_at=now,
+            )]
+
+        # HS 8544.42 KR->US  MFN 2.6%,  KORUS preferential 0.0%  (Power Cables)
+        if hs6 == "854442" and o == "KR" and d == "US":
+            return [RawRate(
+                hs_code="854442", origin="KR", destination="US",
+                effective_date=effective_date,
+                mfn_rate=2.6,
+                preferential_rate=0.0, applicable_fta="KORUS",
+                source="Demo HTS", fetched_at=now,
+            )]
+
+        # HS 3926.90 KR->US  MFN 2.4%,  KORUS preferential 0.0%  (Plastic Accessories)
+        if hs6 == "392690" and o == "KR" and d == "US":
+            return [RawRate(
+                hs_code="392690", origin="KR", destination="US",
+                effective_date=effective_date,
+                mfn_rate=2.4,
+                preferential_rate=0.0, applicable_fta="KORUS",
+                source="Demo HTS", fetched_at=now,
+            )]
+
+        # HS 7326.90 CN->US  MFN 2.9%,  no FTA preferential  (Steel Hardware)
+        if hs6 == "732690" and o == "CN" and d == "US":
+            return [RawRate(
+                hs_code="732690", origin="CN", destination="US",
+                effective_date=effective_date,
+                mfn_rate=2.9,
+                source="Demo HTS", fetched_at=now,
+            )]
+
         # Unknown lane — reachable but no data (treated as empty, not an error)
         return []
 
@@ -252,10 +292,14 @@ while True:
         sys.exit(1)
     time.sleep(0.2)
 
-_ts("Seeded 3 lanes via DemoConnector:")
+_ts("Seeded 7 lanes via DemoConnector:")
 _ts("  HS 8471.30 VN->US  MFN 0.0%")
 _ts("  HS 8471.30 CN->US  MFN 0.0%")
 _ts("  HS 0406.90 KR->US  MFN 7.2%, preferential 0.0% under KORUS (no remedies yet)")
+_ts("  HS 4202.12 KR->US  MFN 5.7%, preferential 0.0% under KORUS  [USITC-verified]")
+_ts("  HS 8544.42 KR->US  MFN 2.6%, preferential 0.0% under KORUS  [USITC-verified]")
+_ts("  HS 3926.90 KR->US  MFN 2.4%, preferential 0.0% under KORUS  [USITC-verified]")
+_ts("  HS 7326.90 CN->US  MFN 2.9%, no FTA                          [USITC-verified]")
 _ts("TariffShockAgent active and subscribed to the rate scheduler")
 
 # ---------------------------------------------------------------------------
