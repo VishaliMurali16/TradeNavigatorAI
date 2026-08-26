@@ -17,7 +17,8 @@ from aggregator.feed_adapter import to_feed_entry as _agg_to_feed_entry
 from data_simulator import get_kpis, get_tariff_sources, get_tariff_feed
 from industry_catalog import get_industries, get_industry_profile, default_industry, classify_shipment
 import fta_data_source
-from fta_data_source import SHIPMENT_TEMPLATE_CSV_WITH_DICT, COO_TEMPLATE_CSV
+from fta_data_source import (SHIPMENT_TEMPLATE_CSV_WITH_DICT, COO_TEMPLATE_CSV,
+                              BOM_TEMPLATE_CSV, ROO_TEMPLATE_CSV)
 from fta_simulator import (COUNTRY_NAMES as _CTRY, PREF_STATUS_LABELS, ROO_STATUS_LABELS,
                            POO_STATUS_LABELS, FIELD_DICTIONARY as _FIELD_DICTIONARY)
 
@@ -176,7 +177,7 @@ def _boot_fta_sample() -> None:
         _log.exception("FTA sample auto-load error")
 
 
-_boot_fta_sample()
+# _boot_fta_sample()  # disabled: FTA page starts empty; upload manually to load data
 
 # In-memory action log for the control tower workflow
 _action_log: list[dict] = []
@@ -498,25 +499,40 @@ def api_action_log():
 
 _CSS = """
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html, body {
-    height: 100%;
-    overflow-x: auto;
-    overflow-y: hidden;
-}
+html, body { height: 100%; overflow-x: auto; overflow-y: hidden; }
 body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, sans-serif;
-    background: linear-gradient(135deg, #f7f5ff 0%, #f2f6fb 100%);
-    color: #1a0533;
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 13px;
+    background: #F7F7F9;
+    color: #1A1A22;
     display: flex;
     min-height: 100vh;
     min-width: 100%;
+    line-height: 1.4;
+}
+
+/* ── Design tokens ────────────────────────────────────────────── */
+:root {
+    --accent:      #A100FF;
+    --accent-dim:  rgba(161,0,255,0.07);
+    --surface:     #FFFFFF;
+    --surface-2:   #F7F7F9;
+    --border:      #E2E2E8;
+    --border-mid:  #CECECE;
+    --text-1:      #1A1A22;
+    --text-2:      #52525B;
+    --text-3:      #8B8B96;
+    --green:       #0D7A5B;
+    --red:         #C0392B;
+    --amber:       #B45309;
+    --sidebar-w:   220px;
 }
 
 /* ── Sidebar ─────────────────────────────────────────────────── */
 .sidebar {
-    width: 260px;
+    width: var(--sidebar-w);
     min-height: 100vh;
-    background: linear-gradient(180deg, #1a0533 0%, #22074b 100%);
+    background: #16161E;
     color: #fff;
     display: flex;
     flex-direction: column;
@@ -524,588 +540,493 @@ body {
     top: 0; left: 0; bottom: 0;
     overflow-y: auto;
     z-index: 100;
-    box-shadow: 10px 0 24px rgba(26,5,51,0.12);
+    border-right: 1px solid #2A2A36;
 }
 .sidebar-brand {
-    padding: 24px 20px 16px;
-    border-bottom: 1px solid rgba(255,255,255,0.1);
+    padding: 12px 14px 10px;
+    border-bottom: 1px solid #2A2A36;
 }
 .sidebar-brand .logo-text {
-    font-size: 1.05rem;
+    font-size: 0.8rem;
     font-weight: 700;
     color: #A100FF;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.2px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
 }
 .sidebar-brand .logo-sub {
-    font-size: 0.7rem;
-    color: rgba(255,255,255,0.45);
+    font-size: 0.6rem;
+    color: rgba(255,255,255,0.32);
     text-transform: uppercase;
-    letter-spacing: 1.5px;
-    margin-top: 2px;
+    letter-spacing: 1.1px;
+    margin-top: 3px;
+    padding-left: 20px;
 }
-.sidebar-nav { padding: 12px 0; flex: 1; }
+.sidebar-nav { padding: 6px 0; flex: 1; }
 .nav-home {
-    display: flex; align-items: center; gap: 10px;
-    padding: 10px 20px;
-    color: rgba(255,255,255,0.9);
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 14px;
+    color: rgba(255,255,255,0.88);
     text-decoration: none;
     font-weight: 600;
-    font-size: 0.9rem;
-    border-left: 3px solid #A100FF;
-    background: rgba(161,0,255,0.12);
-    margin-bottom: 8px;
-}
-.nav-home:hover { background: rgba(161,0,255,0.22); }
-.cluster-label {
-    padding: 10px 20px 4px;
-    font-size: 0.65rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 1.8px;
-    opacity: 0.55;
-    margin-top: 8px;
-}
-.nav-agent {
-    display: flex; align-items: center; gap: 8px;
-    padding: 8px 20px 8px 28px;
-    color: rgba(255,255,255,0.78);
-    text-decoration: none;
-    font-size: 0.82rem;
-    transition: background 0.15s;
-    position: relative;
-}
-.nav-agent:hover { background: rgba(255,255,255,0.07); color: #fff; }
-.nav-agent.active { color: #fff; font-weight: 600; }
-.nav-agent .soon-tag {
-    margin-left: auto;
-    font-size: 0.6rem;
-    background: rgba(255,255,255,0.12);
-    color: rgba(255,255,255,0.45);
-    padding: 2px 6px;
-    border-radius: 4px;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-}
-.nav-agent.coming-soon { opacity: 0.5; }
-
-/* ── Main content ────────────────────────────────────────────── */
-.main { margin-left: 260px; flex: 1; display: flex; flex-wrap: nowrap; height: 100vh; min-width: 720px; overflow: hidden; }
-.page-shell { display: grid; gap: 16px; }
-.page-card {
-    background: rgba(255,255,255,0.95);
-    border: 1px solid rgba(161,0,255,0.1);
-    border-radius: 16px;
-    padding: 20px;
-    box-shadow: 0 10px 24px rgba(26,5,51,0.06);
-}
-.page-title {
-    font-size: 1.1rem;
-    font-weight: 700;
-    color: #1a0533;
-    margin-bottom: 6px;
-}
-.page-subtitle {
-    font-size: 0.84rem;
-    color: #6f6b7d;
-    margin-bottom: 12px;
-}
-.page-grid {
-    display: grid;
-    gap: 16px;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-}
-.info-card {
-    background: linear-gradient(135deg, #faf7ff 0%, #f7fbff 100%);
-    border: 1px solid rgba(161,0,255,0.08);
-    border-radius: 12px;
-    padding: 16px;
-}
-.info-card .label {
-    font-size: 0.72rem;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: #A100FF;
-    font-weight: 700;
-}
-.info-card .value {
-    font-size: 1rem;
-    font-weight: 700;
-    color: #1a0533;
-    margin-top: 6px;
-}
-.log-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.82rem;
-}
-.log-table th, .log-table td {
-    padding: 10px 12px;
-    border-bottom: 1px solid #efe8f7;
-    text-align: left;
-    vertical-align: top;
-}
-.log-table thead th {
-    background: #f6f1ff;
-    color: #5e5871;
-    font-size: 0.72rem;
-    text-transform: uppercase;
-    letter-spacing: 0.9px;
-}
-.log-table tbody tr:hover {
-    background: #fcfaff;
-}
-.badge-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 8px;
-    border-radius: 999px;
-    background: #e8fff9;
-    color: #12B3A3;
-    font-size: 0.72rem;
-    font-weight: 700;
-}
-.main-content {
-    flex: 1 1 auto;
-    min-width: 0;
-    padding: 28px 32px 52px;
-    overflow-y: auto;
-    overflow-x: hidden;
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-    scrollbar-gutter: stable;
-}
-
-/* ── Right tariff pane ───────────────────────────────────────── */
-.tariff-pane-header {
-    padding: 16px 20px;
-    border-bottom: 2px solid #A100FF;
-    background: linear-gradient(135deg, #f0e6ff 0%, #fff 100%);
-}
-.tariff-pane-title { font-size: 0.85rem; font-weight: 700; color: #A100FF; text-transform: uppercase; letter-spacing: 1px; }
-.tariff-pane-subtitle { font-size: 0.7rem; color: #888; margin-top: 2px; }
-
-.sources-monitor {
-    padding: 12px 16px;
-    border-bottom: 1px solid #f0eaf8;
-}
-.sources-title { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; color: #999; margin-bottom: 8px; }
-.source-row {
-    display: flex; align-items: center; gap: 8px;
-    padding: 6px 0; font-size: 0.78rem;
-}
-.source-icon { font-size: 1rem; }
-.source-name { flex: 1; color: #2d1a4a; }
-.source-badge { font-size: 0.6rem; background: #e6fff9; color: #12B3A3; padding: 2px 6px; border-radius: 3px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
-
-.tariff-feed {
-    flex: 1;
-    overflow-y: auto;
-    padding: 8px 0;
-}
-.feed-section-label { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; color: #999; padding: 8px 16px 4px; }
-.tariff-event {
-    padding: 12px 16px;
-    border-bottom: 1px solid #f5f3fa;
-    cursor: pointer;
-    transition: background 0.15s;
-}
-.tariff-event:hover { background: #fafaf8; }
-.tariff-event-header {
-    display: flex; justify-content: space-between; align-items: flex-start; gap: 8px;
+    font-size: 0.74rem;
+    border-left: 2px solid #A100FF;
+    background: rgba(161,0,255,0.10);
     margin-bottom: 4px;
 }
-.tariff-time { font-size: 0.7rem; color: #999; white-space: nowrap; }
-.tariff-status-badge {
-    font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
-    padding: 2px 6px; border-radius: 3px; white-space: nowrap;
+.nav-home:hover { background: rgba(161,0,255,0.17); }
+.cluster-label {
+    padding: 8px 14px 3px;
+    font-size: 0.59rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    opacity: 0.42;
+    margin-top: 4px;
 }
-.status-cleared { background: #d4edda; color: #155724; }
-.status-issued { background: #f8d7da; color: #721c24; }
-.status-pending { background: #fff3cd; color: #856404; }
-.tariff-headline { font-size: 0.8rem; font-weight: 600; color: #2d1a4a; line-height: 1.3; }
-.tariff-detail { font-size: 0.7rem; color: #888; margin-top: 3px; }
-.tariff-source { font-size: 0.65rem; color: #aaa; margin-top: 4px; font-style: italic; }
-
-.tariff-pane-footer {
-    padding: 12px 16px;
-    border-top: 1px solid #f0eaf8;
-    font-size: 0.7rem;
-    color: #aaa;
-    text-align: center;
+.nav-agent {
+    display: flex; align-items: center; gap: 7px;
+    padding: 5px 14px 5px 20px;
+    color: rgba(255,255,255,0.62);
+    text-decoration: none;
+    font-size: 0.73rem;
+    transition: background 0.1s;
+    position: relative;
 }
-.aggregator-badge {
-    display: inline-flex; align-items: center; gap: 4px;
-    background: #e6f7ff; color: #0050b3; padding: 3px 8px; border-radius: 3px;
-    font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+.nav-agent:hover { background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.88); }
+.nav-agent.active {
+    color: #fff; font-weight: 600;
+    border-left: 2px solid #A100FF;
+    padding-left: 18px;
+    background: rgba(161,0,255,0.08);
 }
-.pulse-dot {
+.nav-agent .soon-tag {
+    margin-left: auto;
+    font-size: 0.54rem;
+    background: rgba(255,255,255,0.07);
+    color: rgba(255,255,255,0.32);
+    padding: 1px 5px;
+    border-radius: 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.nav-agent.coming-soon { opacity: 0.38; }
+.nav-icon {
+    width: 13px; height: 13px;
+    flex-shrink: 0; vertical-align: middle;
+    stroke-width: 1.7;
     display: inline-block;
-    width: 6px; height: 6px; background: #12B3A3; border-radius: 50%;
-    animation: pulse 2s infinite;
-}
-@keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
 }
 
-/* ── Page header ─────────────────────────────────────────────── */
-.page-header {
-    background: linear-gradient(135deg, #1a0533 0%, #2d0a5a 100%);
-    color: #fff;
-    border-radius: 16px;
-    padding: 24px 28px;
-    display: flex; align-items: center; gap: 18px;
-    box-shadow: 0 14px 30px rgba(26,5,51,0.12);
+/* ── Main content ────────────────────────────────────────────── */
+.main {
+    margin-left: var(--sidebar-w);
+    flex: 1; display: flex; flex-wrap: nowrap;
+    height: 100vh; min-width: 720px; overflow: hidden;
 }
-.role-switcher {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    background: rgba(255,255,255,0.12);
-    border: 1px solid rgba(255,255,255,0.2);
-    border-radius: 999px;
-    padding: 7px 10px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: #fff;
+.main-content {
+    flex: 1 1 auto; min-width: 0;
+    padding: 14px 20px 34px;
+    overflow-y: auto; overflow-x: hidden;
+    display: flex; flex-direction: column; gap: 10px;
+    scrollbar-gutter: stable;
+    padding-top: calc(40px + 14px);
 }
-.role-switcher select {
-    background: transparent;
-    color: #fff;
-    border: 0;
-    outline: none;
-    font-size: 0.75rem;
-    font-weight: 600;
-}
-.role-switcher select option {
-    color: #1a0533;
-}
-.page-header .header-icon { font-size: 2.4rem; }
-.page-header h1 { font-size: 1.5rem; font-weight: 700; }
-.page-header .header-sub { font-size: 0.85rem; color: rgba(255,255,255,0.65); margin-top: 4px; }
-.header-pills { display:flex; gap:8px; flex-wrap:wrap; margin-top: 8px; }
-.pill {
-    display:inline-flex; align-items:center; gap:6px;
-    padding: 6px 10px; border-radius: 999px;
-    font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 0.8px; background: rgba(255,255,255,0.13); color: #fff;
-}
-.pill.live { background: rgba(18,179,163,0.18); color: #b8fff3; }
-.accent-bar { height: 4px; border-radius: 2px; margin-bottom: 2px; }
 
-.overview-band {
-    display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 14px;
+/* ── Top bar ─────────────────────────────────────────────────── */
+.topbar {
+    position: fixed;
+    top: 0; left: var(--sidebar-w); right: 0; height: 40px;
+    background: #16161E;
+    border-bottom: 1px solid #2A2A36;
+    display: flex; align-items: center; justify-content: flex-end;
+    padding: 0 14px; z-index: 110; gap: 8px;
 }
-.overview-card {
-    background: rgba(255,255,255,0.9);
-    border: 1px solid rgba(161,0,255,0.12);
-    border-radius: 14px;
-    padding: 16px 18px;
-    box-shadow: 0 8px 20px rgba(26,5,51,0.06);
+.topbar-avatar-wrap { position: relative; display: flex; align-items: center; }
+.topbar-avatar {
+    width: 28px; height: 28px; border-radius: 3px;
+    background: rgba(161,0,255,0.14);
+    border: 1px solid rgba(161,0,255,0.38);
+    color: rgba(255,255,255,0.78); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    padding: 0; outline: none; transition: background 0.12s;
 }
-.overview-label { font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; color: #A100FF; }
-.overview-title { font-size: 0.95rem; font-weight: 600; color: #2d1a4a; margin-top: 6px; line-height: 1.4; }
+.topbar-avatar svg, .topbar-avatar i { width: 14px; height: 14px; }
+.topbar-avatar:hover { background: rgba(161,0,255,0.26); }
+.topbar-avatar-tooltip {
+    position: absolute; right: 34px; top: 50%; transform: translateY(-50%);
+    background: #1A1A22; color: #fff;
+    font-size: 0.66rem; font-weight: 600;
+    padding: 3px 8px; border-radius: 3px;
+    white-space: nowrap; pointer-events: none;
+    opacity: 0; transition: opacity 0.12s;
+    border: 1px solid #2A2A36;
+}
+.topbar-avatar-wrap:hover .topbar-avatar-tooltip { opacity: 1; }
+.workspace-dropdown {
+    position: absolute; top: calc(100% + 6px); right: 0;
+    background: var(--surface);
+    border: 1px solid var(--border); border-radius: 3px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.13);
+    min-width: 158px; overflow: hidden; z-index: 9999; display: none;
+}
+.workspace-dropdown.open { display: block; }
+.ws-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 13px;
+    color: var(--text-1); text-decoration: none;
+    font-size: 0.76rem; font-weight: 500;
+    transition: background 0.1s;
+    border-bottom: 1px solid var(--border);
+}
+.ws-item:last-child { border-bottom: none; }
+.ws-item:hover { background: var(--surface-2); color: var(--accent); }
+.ws-icon { display: flex; align-items: center; color: var(--text-3); width: 14px; }
+.ws-icon i { width: 13px; height: 13px; }
+@media (max-width: 760px) {
+    .topbar { left: 0; }
+    .main-content { padding-top: calc(40px + 12px); }
+}
+
+/* ── Cards & generic sections ────────────────────────────────── */
+.page-shell { display: grid; gap: 10px; }
+.page-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 12px 14px;
+}
+.page-title { font-size: 0.78rem; font-weight: 700; color: var(--text-1); margin-bottom: 4px; }
+.page-subtitle { font-size: 0.72rem; color: var(--text-2); margin-bottom: 8px; }
+.page-grid { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+
+.info-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 10px 12px;
+}
+.info-card .label {
+    font-size: 0.66rem; text-transform: uppercase;
+    letter-spacing: 0.7px; color: var(--text-3); font-weight: 600;
+}
+.info-card .value {
+    font-size: 0.86rem; font-weight: 600;
+    color: var(--text-1); margin-top: 3px;
+}
 
 /* ── KPI strip ───────────────────────────────────────────────── */
-/* ── KPI grid (2 rows × 3 columns) ──────────────────────────── */
 .kpi-strip {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     grid-template-rows: auto auto;
-    gap: 16px;
+    gap: 8px;
 }
 .kpi-card {
-    background: #fff;
-    border-radius: 10px;
-    padding: 20px 20px 24px;
-    box-shadow: 0 2px 8px rgba(26,5,51,0.07);
-    border-top: 3px solid #A100FF;
-    min-height: 110px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--accent);
+    border-radius: 4px;
+    padding: 10px 12px 12px;
 }
-.kpi-card.risk    { border-top-color: #F76C6C; }
-.kpi-card.agility { border-top-color: #12B3A3; }
-.kpi-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 1px; color: #888; font-weight: 600; }
-.kpi-value { font-size: 1.75rem; font-weight: 800; color: #1a0533; margin-top: 6px; }
-.kpi-unit  { font-size: 0.78rem; color: #666; margin-top: 2px; }
+.kpi-card.risk    { border-left-color: var(--red); }
+.kpi-card.agility { border-left-color: var(--green); }
+.kpi-label { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.7px; color: var(--text-3); font-weight: 600; }
+.kpi-value { font-size: 1.3rem; font-weight: 700; color: var(--text-1); margin-top: 3px; }
+.kpi-unit  { font-size: 0.68rem; color: var(--text-3); margin-top: 1px; }
 
 /* ── AI summary ──────────────────────────────────────────────── */
 .ai-summary {
-    background: linear-gradient(135deg, #f0e6ff 0%, #e8f7f6 100%);
-    border: 1px solid rgba(161,0,255,0.2);
-    border-left: 4px solid #A100FF;
-    border-radius: 10px;
-    padding: 20px 24px;
-    margin-bottom: 28px;
-    display: flex; gap: 14px; align-items: flex-start;
-    min-height: 80px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--accent);
+    border-radius: 4px;
+    padding: 10px 14px;
+    display: flex; gap: 10px; align-items: flex-start;
 }
-.ai-summary .ai-icon  { font-size: 1.5rem; flex-shrink: 0; }
-.ai-summary .ai-label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #A100FF; }
-.ai-summary .ai-text  { font-size: 0.9rem; color: #2d1a4a; line-height: 1.6; margin-top: 4px; }
-.ai-loading { color: #aaa; font-style: italic; font-size: 0.88rem; margin-top: 4px; }
+.ai-summary .ai-icon { color: var(--accent); flex-shrink: 0; display: flex; align-items: flex-start; padding-top: 1px; }
+.ai-summary .ai-icon i { width: 13px; height: 13px; }
+.ai-summary .ai-label { font-size: 0.63rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.7px; color: var(--accent); }
+.ai-summary .ai-text  { font-size: 0.78rem; color: var(--text-1); line-height: 1.55; margin-top: 2px; }
+.ai-loading { color: var(--text-3); font-style: italic; font-size: 0.76rem; margin-top: 2px; }
 
 /* ── Section card ────────────────────────────────────────────── */
 .section-card {
-    background: #fff;
-    border-radius: 14px;
-    box-shadow: 0 8px 22px rgba(26,5,51,0.06);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
     overflow: hidden;
 }
 .section-card-header {
-    padding: 14px 20px;
-    font-size: 0.8rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    border-bottom: 1px solid #f0eaf8;
-    display: flex; align-items: center; gap: 8px;
-    background: linear-gradient(90deg, rgba(161,0,255,0.05) 0%, rgba(255,255,255,0) 100%);
+    padding: 7px 12px;
+    font-size: 0.68rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.7px;
+    color: var(--text-2);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 6px;
+    background: var(--surface-2);
 }
 
-/* ── Alerts feed ─────────────────────────────────────────────── */
+/* ── Tables ─────────────────────────────────────────────────── */
+.log-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.75rem;
+}
+.log-table th, .log-table td {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+    vertical-align: top;
+}
+.log-table thead th {
+    background: var(--surface-2);
+    color: var(--text-3);
+    font-size: 0.64rem;
+    text-transform: uppercase;
+    letter-spacing: 0.65px;
+    font-weight: 600;
+}
+.log-table tbody tr:hover { background: #FAFAFA; }
+
+/* ── Alerts ──────────────────────────────────────────────────── */
 .alert-row {
-    display: flex; align-items: flex-start; gap: 12px;
-    padding: 12px 20px;
-    border-bottom: 1px solid #f5f3fa;
-    font-size: 0.83rem;
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.75rem;
 }
 .alert-row:last-child { border-bottom: none; }
-.sev-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; margin-top: 5px; }
-.sev-high   { background: #F76C6C; }
-.sev-medium { background: #F5A623; }
-.sev-low    { background: #12B3A3; }
-.alert-msg { flex: 1; color: #2d1a4a; }
-.alert-ts  { font-size: 0.72rem; color: #aaa; white-space: nowrap; }
+.sev-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; margin-top: 4px; }
+.sev-high   { background: var(--red); }
+.sev-medium { background: var(--amber); }
+.sev-low    { background: var(--green); }
+.alert-msg { flex: 1; color: var(--text-1); line-height: 1.4; }
+.alert-ts  { font-size: 0.64rem; color: var(--text-3); white-space: nowrap; }
 
-/* ── Agent grid ──────────────────────────────────────────────── */
-.cluster-section { margin-bottom: 8px; }
-.cluster-section h3 {
-    font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 1.5px; margin-bottom: 12px; padding-left: 4px;
+/* ── Badge / pill ─────────────────────────────────────────────── */
+.badge-pill {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 6px; border-radius: 2px;
+    background: rgba(13,122,91,0.10); color: var(--green);
+    font-size: 0.64rem; font-weight: 600;
 }
-.agent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; }
+
+/* ── Agent grid ─────────────────────────────────────────────── */
+.cluster-section { margin-bottom: 6px; }
+.cluster-section h3 {
+    font-size: 0.64rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 1.1px; margin-bottom: 8px; padding-left: 2px;
+    color: var(--text-3);
+}
+.agent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(175px, 1fr)); gap: 8px; }
 .agent-tile {
-    background: linear-gradient(180deg, #ffffff 0%, #faf8ff 100%);
-    border-radius: 12px;
-    padding: 18px 16px;
-    box-shadow: 0 8px 20px rgba(26,5,51,0.06);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 2px solid;
+    border-radius: 4px;
+    padding: 11px 13px;
     text-decoration: none;
-    color: #1a0533;
-    display: flex; flex-direction: column; gap: 8px;
-    border-top: 3px solid;
-    transition: transform 0.15s, box-shadow 0.15s;
+    color: var(--text-1);
+    display: flex; flex-direction: column; gap: 5px;
+    transition: box-shadow 0.1s, border-color 0.1s;
     position: relative;
 }
-.agent-tile:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(26,5,51,0.12); }
-.agent-tile.coming-soon { opacity: 0.55; pointer-events: none; }
-.agent-tile .tile-icon { font-size: 1.6rem; }
-.agent-tile .tile-name { font-size: 0.85rem; font-weight: 700; line-height: 1.3; }
-.agent-tile .tile-tag  { font-size: 0.72rem; color: #888; }
+.agent-tile:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.07); border-color: var(--border-mid); }
+.agent-tile.coming-soon { opacity: 0.42; pointer-events: none; }
+.agent-tile .tile-icon { display: flex; color: var(--text-2); }
+.agent-tile .tile-icon i { width: 16px; height: 16px; }
+.agent-tile .tile-name { font-size: 0.76rem; font-weight: 600; line-height: 1.3; }
+.agent-tile .tile-tag  { font-size: 0.67rem; color: var(--text-3); line-height: 1.4; }
 .tile-status {
-    position: absolute; top: 10px; right: 10px;
-    font-size: 0.6rem; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 0.8px; padding: 2px 7px; border-radius: 4px;
+    position: absolute; top: 7px; right: 7px;
+    font-size: 0.54rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.5px; padding: 1px 5px; border-radius: 2px;
 }
-.status-live { background: #e6fff9; color: #12B3A3; }
-.status-soon { background: #f4f4f8; color: #aaa; }
+.status-live { background: rgba(13,122,91,0.10); color: var(--green); }
+.status-soon { background: var(--surface-2); color: var(--text-3); }
 
-/* ── Agent detail ────────────────────────────────────────────── */
+/* ── Agent detail header ─────────────────────────────────────── */
 .agent-detail-header {
-    border-radius: 12px; padding: 28px 32px; margin-bottom: 28px;
-    color: #fff; display: flex; align-items: center; gap: 20px;
+    border-radius: 4px; padding: 14px 18px; margin-bottom: 12px;
+    color: #fff; display: flex; align-items: center; gap: 13px;
+    background: #16161E !important;
+    border: 1px solid #2A2A36;
 }
 .coming-soon-box {
-    background: #fff; border-radius: 12px; padding: 60px 40px;
-    text-align: center; box-shadow: 0 2px 8px rgba(26,5,51,0.07);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 4px; padding: 36px 28px; text-align: center;
 }
-.coming-soon-box .cs-icon { font-size: 3rem; margin-bottom: 16px; }
-.coming-soon-box h2 { font-size: 1.3rem; font-weight: 700; margin-bottom: 8px; }
-.coming-soon-box p  { font-size: 0.88rem; color: #888; max-width: 400px; margin: 0 auto; }
+.coming-soon-box .cs-icon { margin-bottom: 10px; color: var(--text-3); display: flex; justify-content: center; }
+.coming-soon-box .cs-icon i { width: 26px; height: 26px; }
+.coming-soon-box h2 { font-size: 0.9rem; font-weight: 700; margin-bottom: 5px; }
+.coming-soon-box p  { font-size: 0.76rem; color: var(--text-2); max-width: 340px; margin: 0 auto; }
 
-/* ── Role to-do ─────────────────────────────────────────────── */
+/* ── Page header (Control Tower) ─────────────────────────────── */
+.page-header {
+    background: #16161E;
+    color: #fff;
+    border-radius: 4px;
+    padding: 14px 18px;
+    display: flex; align-items: center; gap: 13px;
+    border: 1px solid #2A2A36;
+}
+.page-header .header-icon { display: flex; color: var(--accent); }
+.page-header .header-icon i { width: 20px; height: 20px; }
+.page-header h1 { font-size: 1rem; font-weight: 700; }
+.page-header .header-sub { font-size: 0.73rem; color: rgba(255,255,255,0.48); margin-top: 2px; }
+.header-pills { display:flex; gap:5px; flex-wrap:wrap; margin-top: 5px; }
+.pill {
+    display:inline-flex; align-items:center; gap:4px;
+    padding: 2px 7px; border-radius: 2px;
+    font-size: 0.63rem; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.5px; background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.78);
+}
+.pill.live { background: rgba(13,122,91,0.18); color: #4ade80; }
+.accent-bar { height: 2px; border-radius: 1px; margin-bottom: 1px; }
+.role-switcher {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.13);
+    border-radius: 3px; padding: 4px 8px;
+    font-size: 0.69rem; font-weight: 600; color: #fff;
+}
+.role-switcher select {
+    background: transparent; color: #fff; border: 0; outline: none;
+    font-size: 0.69rem; font-weight: 600;
+}
+.role-switcher select option { color: var(--text-1); }
+
+/* ── Overview band ───────────────────────────────────────────── */
+.overview-band { display:grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
+.overview-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 4px; padding: 10px 12px;
+}
+.overview-label { font-size: 0.62rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.9px; color: var(--accent); }
+.overview-title { font-size: 0.8rem; font-weight: 600; color: var(--text-1); margin-top: 3px; line-height: 1.4; }
+
+/* ── Industry context bar ─────────────────────────────────────── */
+.industry-context-bar {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 11px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--accent);
+    border-radius: 3px;
+    font-size: 0.73rem; color: var(--text-2);
+}
+.industry-context-bar strong { color: var(--accent); font-weight: 600; }
+.industry-context-bar i { width: 12px; height: 12px; flex-shrink: 0; color: var(--text-3); }
+
+/* ── Role to-do ──────────────────────────────────────────────── */
 .role-todo {
-    background: #fff;
-    border-radius: 14px;
-    box-shadow: 0 8px 22px rgba(26,5,51,0.06);
-    padding: 18px 20px;
-    border: 1px solid rgba(161,0,255,0.12);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 4px; padding: 10px 12px;
 }
 .role-todo-title {
-    font-size: 0.8rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: #A100FF;
-    margin-bottom: 10px;
+    font-size: 0.68rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.7px; color: var(--text-2); margin-bottom: 7px;
 }
-.role-todo-list {
-    display: grid;
-    gap: 8px;
-}
+.role-todo-list { display: grid; gap: 5px; }
 .role-todo-item {
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-    padding: 10px 12px;
-    background: #f8f6ff;
-    border-radius: 10px;
-    font-size: 0.84rem;
-    color: #2d1a4a;
+    display: flex; align-items: flex-start; gap: 7px;
+    padding: 6px 9px;
+    background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: 3px;
+    font-size: 0.74rem; color: var(--text-1);
 }
 .role-todo-item .dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: #12B3A3;
-    margin-top: 6px;
-    flex-shrink: 0;
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--green); margin-top: 5px; flex-shrink: 0;
 }
-.role-todo-item.completed {
-    background: #f2fbf8;
-    border: 1px solid rgba(18,179,163,0.15);
-}
-.role-todo-item.completed .dot {
-    background: #12B3A3;
-}
+.role-todo-item.completed { border-color: rgba(13,122,91,0.18); }
 .task-text { flex: 1; }
-.task-meta { margin-top: 4px; font-size: 0.72rem; color: #6f6b7d; }
+.task-meta { margin-top: 2px; font-size: 0.65rem; color: var(--text-3); }
 .todo-complete-btn {
-    background: #1a0533;
-    color: #fff;
-    border: 0;
-    border-radius: 999px;
-    font-size: 0.72rem;
-    font-weight: 700;
-    padding: 6px 10px;
-    cursor: pointer;
+    background: var(--text-1); color: #fff; border: 0;
+    border-radius: 2px; font-size: 0.65rem; font-weight: 600;
+    padding: 3px 8px; cursor: pointer;
 }
-.todo-complete-btn:hover { background: #2d0a5a; }
+.todo-complete-btn:hover { background: #2d2d3a; }
 .todo-state-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 0.7rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.7px;
-    color: #12B3A3;
-    margin-left: 8px;
+    display: inline-flex; align-items: center; gap: 3px;
+    font-size: 0.63rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.4px; color: var(--green); margin-left: 5px;
 }
 .todo-modal {
-    position: fixed;
-    inset: 0;
-    background: rgba(26,5,51,0.45);
-    display: none;
-    align-items: center;
-    justify-content: center;
-    z-index: 200;
-    padding: 20px;
+    position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+    display: none; align-items: center; justify-content: center;
+    z-index: 200; padding: 20px;
 }
 .todo-modal.active { display: flex; }
 .todo-modal-card {
-    width: min(480px, 100%);
-    background: #fff;
-    border-radius: 14px;
-    padding: 20px;
-    box-shadow: 0 16px 40px rgba(26,5,51,0.18);
+    width: min(450px, 100%); background: var(--surface);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 16px; box-shadow: 0 8px 24px rgba(0,0,0,0.14);
 }
-.todo-modal-title {
-    font-size: 0.95rem;
-    font-weight: 700;
-    color: #1a0533;
-    margin-bottom: 12px;
-}
-.todo-modal label { display: block; font-size: 0.8rem; font-weight: 600; color: #5e5871; margin-bottom: 6px; }
+.todo-modal-title { font-size: 0.83rem; font-weight: 700; color: var(--text-1); margin-bottom: 10px; }
+.todo-modal label { display: block; font-size: 0.72rem; font-weight: 600; color: var(--text-2); margin-bottom: 3px; }
 .todo-modal textarea, .todo-modal input {
-    width: 100%;
-    border: 1px solid #e5dff0;
-    border-radius: 10px;
-    padding: 10px 12px;
-    margin-bottom: 12px;
-    font-size: 0.84rem;
-    color: #1a0533;
+    width: 100%; border: 1px solid var(--border); border-radius: 3px;
+    padding: 6px 10px; margin-bottom: 8px;
+    font-size: 0.76rem; color: var(--text-1);
+    font-family: inherit;
 }
-.todo-modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.todo-modal-actions { display: flex; justify-content: flex-end; gap: 6px; }
 .todo-modal-actions button {
-    border: 0;
-    border-radius: 999px;
-    padding: 8px 12px;
-    cursor: pointer;
-    font-weight: 700;
-    font-size: 0.78rem;
+    border: 0; border-radius: 2px; padding: 5px 11px;
+    cursor: pointer; font-weight: 600; font-size: 0.71rem;
 }
-.todo-modal-actions .save-btn { background: #1a0533; color: #fff; }
-.todo-modal-actions .cancel-btn { background: #f2eef9; color: #5e5871; }
+.todo-modal-actions .save-btn   { background: var(--text-1); color: #fff; }
+.todo-modal-actions .cancel-btn { background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border); }
 
-/* ── Misc ─────────────────────────────────────────────────────── */
+/* ── Misc ────────────────────────────────────────────────────── */
 .back-link {
-    display: inline-flex; align-items: center; gap: 6px;
-    color: #A100FF; text-decoration: none; font-size: 0.83rem; font-weight: 600;
-    margin-bottom: 18px;
+    display: inline-flex; align-items: center; gap: 5px;
+    color: var(--accent); text-decoration: none; font-size: 0.74rem; font-weight: 600;
+    margin-bottom: 10px;
 }
 .back-link:hover { text-decoration: underline; }
 .footer {
-    margin-top: 20px; padding-top: 16px;
-    border-top: 1px solid #e8e0f0;
-    font-size: 0.72rem; color: #b2a8c8; text-align: right;
+    margin-top: 14px; padding-top: 10px;
+    border-top: 1px solid var(--border);
+    font-size: 0.63rem; color: var(--text-3); text-align: right;
 }
 
 @media (max-width: 760px) {
-    .sidebar { position: static; width: 100%; min-height: auto; max-height: none; }
+    .sidebar { position: static; width: 100%; min-height: auto; }
     .main { margin-left: 0; flex-direction: column; }
-    .main-content { padding: 20px 16px 52px; }
+    .main-content { padding: 10px 12px 34px; }
     .page-header { flex-direction: column; align-items: flex-start; }
 }
 
 /* ── Bottom tariff ticker ─────────────────────────────────────── */
-:root { --sidebar-w: 260px; }
+:root { --sidebar-w: 220px; }
 @media (max-width: 760px) { :root { --sidebar-w: 0px; } }
 .ticker-wrap {
-    position: fixed;
-    bottom: 0;
-    left: var(--sidebar-w);
-    right: 0;
-    height: 36px;
-    background: #12062a;
-    border-top: 1px solid rgba(161,0,255,0.3);
+    position: fixed; bottom: 0;
+    left: var(--sidebar-w); right: 0; height: 28px;
+    background: #0F0F17;
+    border-top: 1px solid #2A2A36;
     z-index: 108;
-    display: flex;
-    align-items: center;
-    overflow: hidden;
-    font-size: 0.72rem;
-    color: rgba(255,255,255,0.85);
+    display: flex; align-items: center; overflow: hidden;
+    font-size: 0.67rem; color: rgba(255,255,255,0.78);
     user-select: none;
 }
 .ticker-label {
-    flex-shrink: 0;
-    padding: 0 12px;
-    font-size: 0.58rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
-    color: #A100FF;
-    border-right: 1px solid rgba(161,0,255,0.3);
-    height: 100%;
-    display: flex;
-    align-items: center;
-    background: #0e0422;
-    white-space: nowrap;
+    flex-shrink: 0; padding: 0 10px;
+    font-size: 0.55rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 1.2px; color: #A100FF;
+    border-right: 1px solid #2A2A36;
+    height: 100%; display: flex; align-items: center;
+    background: #0B0B12; white-space: nowrap; gap: 6px;
 }
-.ticker-track {
-    flex: 1;
-    overflow: hidden;
-    height: 100%;
-    position: relative;
-}
+.ticker-track { flex: 1; overflow: hidden; height: 100%; position: relative; }
 .ticker-inner {
-    display: inline-flex;
-    align-items: center;
-    white-space: nowrap;
-    height: 100%;
-    will-change: transform;
+    display: inline-flex; align-items: center;
+    white-space: nowrap; height: 100%; will-change: transform;
 }
 .ticker-wrap:hover .ticker-inner { animation-play-state: paused; }
 @keyframes ticker-scroll {
@@ -1113,385 +1034,318 @@ body {
     100% { transform: translateX(var(--tk-to, -50%)); }
 }
 .ticker-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    margin-right: 32px;
+    display: inline-flex; align-items: center; gap: 5px;
+    margin-right: 26px; cursor: pointer;
 }
+.ticker-item:hover { opacity: 0.7; }
 .tick-badge {
-    font-size: 0.58rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    padding: 1px 6px;
-    border-radius: 3px;
-    flex-shrink: 0;
+    font-size: 0.54rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.4px; padding: 1px 5px; border-radius: 2px; flex-shrink: 0;
 }
-.tick-cleared { background: rgba(18,179,163,0.22);  color: #12B3A3; }
-.tick-issued  { background: rgba(247,108,108,0.22); color: #F76C6C; }
-.tick-pending { background: rgba(245,166,35,0.22);  color: #F5A623; }
-.tick-dot { width:9px; height:9px; border-radius:50%; border:none; padding:0;
+.tick-cleared { background: rgba(13,122,91,0.22);  color: #4ade80; }
+.tick-issued  { background: rgba(192,57,43,0.22);  color: #f87171; }
+.tick-pending { background: rgba(180,83,9,0.22);   color: #fb923c; }
+.tick-dot { width:6px; height:6px; border-radius:50%; border:none; padding:0;
     flex-shrink:0; cursor:pointer; display:inline-block; vertical-align:middle; }
-.tick-dot.tick-cleared { background:#12B3A3; }
-.tick-dot.tick-issued  { background:#F76C6C; }
-.tick-dot.tick-pending { background:#F5A623; }
-.ticker-src { color: rgba(255,255,255,0.38); font-style: normal; }
-.ticker-sep { color: rgba(161,0,255,0.4); margin: 0 10px; }
-.ticker-item { cursor: pointer; }
-.ticker-item:hover { opacity: 0.75; }
+.tick-dot.tick-cleared { background:#4ade80; }
+.tick-dot.tick-issued  { background:#f87171; }
+.tick-dot.tick-pending { background:#fb923c; }
+.ticker-src { color: rgba(255,255,255,0.30); font-style: normal; }
+.ticker-sep { color: rgba(161,0,255,0.32); margin: 0 8px; }
 .ticker-label-btn { background:none; border:none; color:inherit; font:inherit;
     letter-spacing:inherit; text-transform:inherit; cursor:pointer; padding:0; }
 .ticker-label-btn:hover { text-decoration:underline; }
 
-/* ── Ticker feed dialog ──────────────────────────────────────────── */
-.tf-overlay { display:none; position:fixed; inset:0; background:rgba(26,5,51,0.55);
+/* ── Ticker live dot ──────────────────────────────────────────── */
+.ticker-dot {
+    display: inline-block; width: 5px; height: 5px;
+    border-radius: 50%; background: #4ade80; flex-shrink: 0;
+    animation: tdot-pulse 2.2s ease-in-out infinite;
+}
+@keyframes tdot-pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.35; }
+}
+
+/* ── Ticker feed dialog ────────────────────────────────────────── */
+.tf-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.48);
     z-index:600; align-items:center; justify-content:center; }
 .tf-overlay.open { display:flex; }
-.tf-card { background:#fff; border-radius:14px; padding:0;
-    width:min(540px,92vw); max-height:78vh; overflow-y:auto;
-    box-shadow:0 24px 64px rgba(26,5,51,0.2); }
+.tf-card { background:var(--surface); border:1px solid var(--border); border-radius:4px;
+    width:min(510px,92vw); max-height:78vh; overflow-y:auto;
+    box-shadow:0 8px 24px rgba(0,0,0,0.16); }
 .tf-header { display:flex; align-items:center; justify-content:space-between;
-    padding:14px 20px; border-bottom:1px solid #f0eaf8; position:sticky; top:0; background:#fff; }
-.tf-title { font-size:0.84rem; font-weight:700; color:#1a0533; }
-.tf-close { background:none; border:none; font-size:1.1rem; cursor:pointer; color:#999;
-    padding:4px 8px; line-height:1; border-radius:4px; }
-.tf-close:hover { background:#f5f5f5; }
-.tf-entry { padding:14px 20px; border-bottom:1px solid #faf7ff; }
+    padding:9px 14px; border-bottom:1px solid var(--border);
+    position:sticky; top:0; background:var(--surface); }
+.tf-title { font-size:0.77rem; font-weight:700; color:var(--text-1); }
+.tf-close { background:none; border:none; font-size:0.95rem; cursor:pointer;
+    color:var(--text-3); padding:3px 7px; line-height:1; border-radius:2px; }
+.tf-close:hover { background:var(--surface-2); }
+.tf-entry { padding:9px 14px; border-bottom:1px solid var(--border); font-size:0.75rem; }
 .tf-entry:last-child { border-bottom:none; }
-.tf-illus { margin:8px 0 0; padding:7px 10px; background:#fff8e1;
-    border-left:3px solid #ffc107; border-radius:0 6px 6px 0;
-    font-size:0.7rem; color:#7a5c00; }
+.tf-illus { margin:5px 0 0; padding:5px 9px; background:#fffbeb;
+    border-left:2px solid #d97706; border-radius:0 2px 2px 0;
+    font-size:0.67rem; color:#78350f; }
 
-/* ── AI Chat Widget ──────────────────────────────────────────────── */
+/* ── Right tariff pane ─────────────────────────────────────────── */
+.tariff-pane-header {
+    padding: 9px 13px; border-bottom: 1px solid var(--border);
+    background: var(--surface-2);
+}
+.tariff-pane-title { font-size: 0.68rem; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: 0.7px; }
+.tariff-pane-subtitle { font-size: 0.63rem; color: var(--text-3); margin-top: 2px; }
+.sources-monitor { padding: 7px 11px; border-bottom: 1px solid var(--border); }
+.sources-title { font-size: 0.58rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.9px; color: var(--text-3); margin-bottom: 5px; }
+.source-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 0.71rem; }
+.source-icon { display: flex; align-items: center; }
+.source-icon i { width: 11px; height: 11px; color: var(--text-3); }
+.source-name { flex: 1; color: var(--text-1); }
+.source-badge { font-size: 0.57rem; background: rgba(13,122,91,0.10); color: var(--green);
+    padding: 1px 5px; border-radius: 2px; font-weight: 600; text-transform: uppercase; }
+.tariff-feed { flex: 1; overflow-y: auto; padding: 3px 0; }
+.feed-section-label { font-size: 0.58rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.9px; color: var(--text-3); padding: 5px 11px 3px; }
+.tariff-event { padding: 7px 11px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.1s; }
+.tariff-event:hover { background: var(--surface-2); }
+.tariff-event-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 5px; margin-bottom: 2px; }
+.tariff-time { font-size: 0.63rem; color: var(--text-3); white-space: nowrap; }
+.tariff-status-badge {
+    font-size: 0.57rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px;
+    padding: 1px 4px; border-radius: 2px; white-space: nowrap;
+}
+.status-cleared { background: rgba(13,122,91,0.10); color: var(--green); }
+.status-issued  { background: rgba(192,57,43,0.10); color: var(--red); }
+.status-pending { background: rgba(180,83,9,0.10);  color: var(--amber); }
+.tariff-headline { font-size: 0.72rem; font-weight: 600; color: var(--text-1); line-height: 1.3; }
+.tariff-detail { font-size: 0.63rem; color: var(--text-3); margin-top: 2px; }
+.tariff-source { font-size: 0.6rem; color: var(--text-3); margin-top: 2px; font-style: italic; }
+.tariff-pane-footer { padding: 7px 11px; border-top: 1px solid var(--border); font-size: 0.63rem; color: var(--text-3); text-align: center; }
+.aggregator-badge {
+    display: inline-flex; align-items: center; gap: 3px;
+    background: rgba(0,80,179,0.07); color: #0050b3; padding: 1px 6px; border-radius: 2px;
+    font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; font-size: 0.57rem;
+}
+.pulse-dot {
+    display: inline-block; width: 5px; height: 5px; background: var(--green); border-radius: 50%;
+    animation: pulse 2s infinite;
+}
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+/* ── AI Chat Widget ────────────────────────────────────────────── */
 .ai-chat-trigger {
-    margin: auto 16px 20px;
-    background: linear-gradient(135deg, #A100FF 0%, #6600cc 100%);
-    border: none; border-radius: 12px;
-    padding: 11px 16px;
+    margin: auto 12px 12px;
+    background: #A100FF;
+    border: none; border-radius: 3px;
+    padding: 7px 11px;
     color: #fff; cursor: pointer;
-    display: flex; align-items: center; gap: 10px;
-    font-size: 0.82rem; font-weight: 600;
-    box-shadow: 0 4px 18px rgba(161,0,255,0.40);
-    transition: transform 0.15s, box-shadow 0.15s;
-    width: calc(100% - 32px);
-    text-align: left;
+    display: flex; align-items: center; gap: 8px;
+    font-size: 0.73rem; font-weight: 600;
+    transition: background 0.1s;
+    width: calc(100% - 24px); text-align: left;
 }
-.ai-chat-trigger:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 24px rgba(161,0,255,0.55);
-}
-.ai-chat-trigger .ct-icon { font-size: 1.2rem; flex-shrink: 0; }
+.ai-chat-trigger:hover { background: #8800e0; }
+.ai-chat-trigger .ct-icon { display: flex; align-items: center; flex-shrink: 0; }
+.ai-chat-trigger .ct-icon i { width: 13px; height: 13px; }
 .ai-chat-trigger .ct-label { flex: 1; }
 .ai-chat-trigger .ct-label small {
-    display: block; font-size: 0.62rem; font-weight: 400;
-    color: rgba(255,255,255,0.6); margin-top: 1px;
+    display: block; font-size: 0.57rem; font-weight: 400;
+    color: rgba(255,255,255,0.58); margin-top: 1px;
 }
 .ai-chat-trigger .ct-soon {
-    font-size: 0.58rem; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 0.8px; background: rgba(255,255,255,0.18);
-    padding: 2px 6px; border-radius: 4px; flex-shrink: 0;
+    font-size: 0.53rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.5px; background: rgba(255,255,255,0.14);
+    padding: 1px 5px; border-radius: 2px; flex-shrink: 0;
 }
-
-/* Overlay */
 .ai-chat-overlay {
     display: none; position: fixed; inset: 0;
-    background: rgba(10,0,30,0.55); backdrop-filter: blur(3px);
+    background: rgba(0,0,0,0.48); backdrop-filter: blur(2px);
     z-index: 500; align-items: center; justify-content: center;
 }
 .ai-chat-overlay.open { display: flex; }
-
-/* Panel */
 .ai-chat-panel {
-    width: 420px; max-width: calc(100vw - 32px);
-    height: 560px; max-height: calc(100vh - 60px);
-    background: #fff; border-radius: 20px;
-    box-shadow: 0 32px 80px rgba(10,0,30,0.30);
-    display: flex; flex-direction: column;
-    overflow: hidden;
-    animation: chatSlideIn 0.25s cubic-bezier(0.34,1.56,0.64,1);
+    width: 390px; max-width: calc(100vw - 24px);
+    height: 510px; max-height: calc(100vh - 50px);
+    background: var(--surface);
+    border: 1px solid var(--border); border-radius: 4px;
+    box-shadow: 0 10px 36px rgba(0,0,0,0.20);
+    display: flex; flex-direction: column; overflow: hidden;
+    animation: chatSlideIn 0.18s ease;
 }
 @keyframes chatSlideIn {
-    from { opacity: 0; transform: scale(0.92) translateY(24px); }
-    to   { opacity: 1; transform: scale(1) translateY(0); }
+    from { opacity: 0; transform: translateY(14px); }
+    to   { opacity: 1; transform: translateY(0); }
 }
-
-/* Panel header */
 .ai-chat-header {
-    background: linear-gradient(135deg, #1a0533 0%, #2d0a5a 100%);
-    padding: 18px 20px 14px;
-    display: flex; align-items: center; gap: 12px;
-    flex-shrink: 0;
+    background: #16161E;
+    padding: 10px 14px 9px;
+    display: flex; align-items: center; gap: 9px; flex-shrink: 0;
+    border-bottom: 1px solid #2A2A36;
 }
 .ai-chat-header .ch-avatar {
-    width: 38px; height: 38px; border-radius: 50%;
-    background: linear-gradient(135deg, #A100FF, #6600cc);
+    width: 28px; height: 28px; border-radius: 3px;
+    background: rgba(161,0,255,0.18);
+    border: 1px solid rgba(161,0,255,0.38);
     display: flex; align-items: center; justify-content: center;
-    font-size: 1.1rem; flex-shrink: 0;
+    flex-shrink: 0; color: #A100FF;
 }
+.ai-chat-header .ch-avatar i { width: 13px; height: 13px; }
 .ai-chat-header .ch-title { flex: 1; }
-.ai-chat-header .ch-title h3 {
-    font-size: 0.92rem; font-weight: 700; color: #fff; margin: 0;
-}
-.ai-chat-header .ch-title span {
-    font-size: 0.68rem; color: rgba(255,255,255,0.5);
-}
+.ai-chat-header .ch-title h3 { font-size: 0.8rem; font-weight: 700; color: #fff; margin: 0; }
+.ai-chat-header .ch-title span { font-size: 0.6rem; color: rgba(255,255,255,0.42); }
 .ai-chat-close {
-    background: rgba(255,255,255,0.10); border: none;
-    color: rgba(255,255,255,0.7); width: 30px; height: 30px;
-    border-radius: 50%; cursor: pointer; font-size: 1rem;
+    background: rgba(255,255,255,0.07); border: none;
+    color: rgba(255,255,255,0.58); width: 24px; height: 24px;
+    border-radius: 3px; cursor: pointer; font-size: 0.88rem;
     display: flex; align-items: center; justify-content: center;
-    transition: background 0.15s;
+    transition: background 0.1s;
 }
-.ai-chat-close:hover { background: rgba(255,255,255,0.22); color: #fff; }
-
-/* Messages area */
+.ai-chat-close:hover { background: rgba(255,255,255,0.14); color: #fff; }
 .ai-chat-messages {
-    flex: 1; overflow-y: auto; padding: 20px 16px 8px;
-    display: flex; flex-direction: column; gap: 14px;
-    background: #f8f6fc;
+    flex: 1; overflow-y: auto; padding: 12px 11px 6px;
+    display: flex; flex-direction: column; gap: 9px;
+    background: var(--surface-2);
 }
-.chat-bubble-row {
-    display: flex; align-items: flex-end; gap: 8px;
-}
+.chat-bubble-row { display: flex; align-items: flex-end; gap: 6px; }
 .chat-bubble-row.bot { justify-content: flex-start; }
 .chat-bubble-row.user { justify-content: flex-end; }
 .cb-avatar {
-    width: 28px; height: 28px; border-radius: 50%;
-    background: linear-gradient(135deg, #A100FF, #6600cc);
+    width: 21px; height: 21px; border-radius: 3px;
+    background: rgba(161,0,255,0.13);
     display: flex; align-items: center; justify-content: center;
-    font-size: 0.8rem; flex-shrink: 0;
+    flex-shrink: 0; color: #A100FF;
 }
+.cb-avatar i { width: 11px; height: 11px; }
 .chat-bubble {
-    max-width: 80%; padding: 11px 14px;
-    border-radius: 16px; font-size: 0.83rem; line-height: 1.5;
+    max-width: 82%; padding: 7px 11px;
+    border-radius: 3px; font-size: 0.76rem; line-height: 1.44;
 }
 .chat-bubble.bot {
-    background: #fff; color: #2d1a4a;
-    border-bottom-left-radius: 4px;
-    box-shadow: 0 2px 8px rgba(26,5,51,0.08);
+    background: var(--surface); color: var(--text-1);
+    border: 1px solid var(--border); border-bottom-left-radius: 0;
 }
-.chat-bubble.user {
-    background: linear-gradient(135deg, #A100FF, #6600cc);
-    color: #fff; border-bottom-right-radius: 4px;
-}
+.chat-bubble.user { background: #A100FF; color: #fff; border-bottom-right-radius: 0; }
 .chat-coming-soon-card {
-    background: linear-gradient(135deg, #f0e6ff 0%, #e8f0ff 100%);
-    border: 1.5px solid rgba(161,0,255,0.20);
-    border-radius: 14px; padding: 16px;
-    font-size: 0.80rem;
+    background: var(--surface); border: 1px solid var(--border);
+    border-left: 2px solid var(--accent);
+    border-radius: 3px; padding: 11px; font-size: 0.75rem;
 }
 .chat-coming-soon-card .cc-heading {
-    font-weight: 700; color: #A100FF; margin-bottom: 10px;
-    display: flex; align-items: center; gap: 6px; font-size: 0.85rem;
+    font-weight: 700; color: var(--accent); margin-bottom: 7px;
+    display: flex; align-items: center; gap: 5px; font-size: 0.78rem;
 }
 .chat-coming-soon-card ul {
-    margin: 0; padding-left: 18px; color: #4a2a7a;
-    display: flex; flex-direction: column; gap: 5px;
+    margin: 0; padding-left: 15px; color: var(--text-2);
+    display: flex; flex-direction: column; gap: 3px;
 }
 .chat-coming-soon-card .cc-footer {
-    margin-top: 12px; padding-top: 10px;
-    border-top: 1px solid rgba(161,0,255,0.15);
-    font-size: 0.73rem; color: #888; font-style: italic;
+    margin-top: 9px; padding-top: 7px;
+    border-top: 1px solid var(--border);
+    font-size: 0.66rem; color: var(--text-3); font-style: italic;
 }
-
-/* Input bar */
 .ai-chat-input-bar {
-    padding: 12px 16px; background: #fff;
-    border-top: 1px solid #f0eaf8;
-    display: flex; align-items: center; gap: 10px;
-    flex-shrink: 0;
+    padding: 9px 11px; background: var(--surface);
+    border-top: 1px solid var(--border);
+    display: flex; align-items: center; gap: 7px; flex-shrink: 0;
 }
 .ai-chat-input-bar input {
-    flex: 1; border: 1.5px solid #e8e0f0; border-radius: 24px;
-    padding: 10px 16px; font-size: 0.83rem; outline: none;
-    background: #f8f6fc; color: #1a0533; cursor: text;
-    transition: border-color 0.15s;
+    flex: 1; border: 1px solid var(--border); border-radius: 3px;
+    padding: 6px 11px; font-size: 0.76rem; outline: none;
+    background: var(--surface-2); color: var(--text-1);
+    transition: border-color 0.12s; font-family: inherit;
 }
-.ai-chat-input-bar input:focus { border-color: #A100FF; }
+.ai-chat-input-bar input:focus { border-color: var(--accent); }
 .ai-chat-send-btn {
-    width: 38px; height: 38px; border-radius: 50%; border: none;
-    background: linear-gradient(135deg, #A100FF, #6600cc); color: #fff;
+    width: 28px; height: 28px; border-radius: 3px; border: none;
+    background: #A100FF; color: #fff;
     display: flex; align-items: center; justify-content: center;
-    cursor: pointer; font-size: 1.1rem; flex-shrink: 0;
-    transition: transform 0.12s, box-shadow 0.12s;
+    cursor: pointer; font-size: 0.88rem; flex-shrink: 0;
+    transition: background 0.1s;
 }
-.ai-chat-send-btn:hover { transform: scale(1.08); box-shadow: 0 4px 14px rgba(161,0,255,0.4); }
-.ai-chat-typing { display: flex; align-items: center; gap: 5px; padding: 6px 12px; }
+.ai-chat-send-btn:hover { background: #8800e0; }
+.ai-chat-typing { display: flex; align-items: center; gap: 4px; padding: 4px 9px; }
 .ai-chat-typing span {
-    width: 7px; height: 7px; border-radius: 50%;
-    background: #A100FF; opacity: 0.4;
+    width: 5px; height: 5px; border-radius: 50%;
+    background: var(--accent); opacity: 0.38;
     animation: typingPulse 1.2s ease-in-out infinite;
 }
 .ai-chat-typing span:nth-child(2) { animation-delay: 0.2s; }
 .ai-chat-typing span:nth-child(3) { animation-delay: 0.4s; }
 @keyframes typingPulse {
-    0%, 80%, 100% { opacity: 0.3; transform: scale(0.85); }
+    0%, 80%, 100% { opacity: 0.28; transform: scale(0.85); }
     40% { opacity: 1; transform: scale(1.1); }
 }
 
-/* ── Top bar & Workspace avatar ───────────────────────────────── */
-.topbar {
-    position: fixed;
-    top: 0; left: 260px; right: 0; height: 52px;
-    background: linear-gradient(90deg, #1a0533 0%, #2d0a5a 100%);
-    border-bottom: 1px solid rgba(161,0,255,0.2);
-    display: flex; align-items: center; justify-content: flex-end;
-    padding: 0 20px;
-    z-index: 110;
-    box-sizing: border-box;
-}
-.topbar-avatar-wrap {
-    position: relative;
-    display: flex; align-items: center;
-}
-.topbar-avatar {
-    width: 36px; height: 36px; border-radius: 50%;
-    background: rgba(161,0,255,0.18);
-    border: 2px solid #A100FF;
-    color: #fff; cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    padding: 0; outline: none;
-    transition: background 0.18s, box-shadow 0.18s;
-}
-.topbar-avatar svg { width: 20px; height: 20px; }
-.topbar-avatar:hover {
-    background: rgba(161,0,255,0.35);
-    box-shadow: 0 0 0 3px rgba(161,0,255,0.25);
-}
-.topbar-avatar-tooltip {
-    position: absolute;
-    right: 44px; top: 50%; transform: translateY(-50%);
-    background: rgba(26,5,51,0.92); color: #fff;
-    font-size: 0.72rem; font-weight: 600;
-    padding: 4px 10px; border-radius: 6px;
-    white-space: nowrap; pointer-events: none;
-    opacity: 0; transition: opacity 0.15s;
-}
-.topbar-avatar-wrap:hover .topbar-avatar-tooltip { opacity: 1; }
-.workspace-dropdown {
-    position: absolute;
-    top: calc(100% + 10px); right: 0;
-    background: #fff; border-radius: 10px;
-    box-shadow: 0 8px 32px rgba(26,5,51,0.18), 0 2px 8px rgba(0,0,0,0.08);
-    min-width: 180px; overflow: hidden;
-    z-index: 9999;
-    display: none;
-}
-.workspace-dropdown.open {
-    display: block;
-}
-.ws-item {
-    display: flex; align-items: center; gap: 10px;
-    padding: 12px 18px;
-    color: #1a0533; text-decoration: none;
-    font-size: 0.85rem; font-weight: 500;
-    transition: background 0.12s;
-}
-.ws-item:hover { background: rgba(161,0,255,0.07); color: #A100FF; }
-.ws-icon { font-size: 1rem; }
-.main-content { padding-top: calc(52px + 28px); }
-@media (max-width: 760px) {
-    .topbar { left: 0; }
-    .main-content { padding-top: calc(52px + 20px); }
-}
-
-.industry-context-bar {
-    display: flex; align-items: center; gap: 8px;
-    padding: 9px 16px;
-    background: rgba(161,0,255,0.06);
-    border: 1px solid rgba(161,0,255,0.15);
-    border-radius: 8px;
-    font-size: 0.8rem; color: #5a3d7a;
-    margin-bottom: 18px;
-}
-.industry-context-bar strong { color: #A100FF; font-weight: 700; }
-
-/* ── Ticker live bullet ───────────────────────────────────── */
-.ticker-dot {
-    display: inline-block; width: 7px; height: 7px;
-    border-radius: 50%; background: #12B3A3;
-    margin-right: 6px; flex-shrink: 0;
-    animation: tdot-pulse 2.2s ease-in-out infinite;
-}
-@keyframes tdot-pulse {
-    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(18,179,163,0.6); }
-    50%       { opacity: 0.55; box-shadow: 0 0 0 4px rgba(18,179,163,0); }
-}
-
-/* ── Rate-source dialog ───────────────────────────────────── */
+/* ── Rate-source dialog ────────────────────────────────────────── */
 .rs-overlay {
     display: none; position: fixed; inset: 0;
-    background: rgba(26,5,51,0.55); z-index: 500;
+    background: rgba(0,0,0,0.42); z-index: 500;
     align-items: center; justify-content: center;
 }
 .rs-overlay.open { display: flex; }
 .rs-card {
-    background: #fff; border-radius: 14px;
-    padding: 28px 30px; max-width: 440px; width: 90%;
-    box-shadow: 0 12px 48px rgba(26,5,51,0.22);
-    position: relative;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 4px; padding: 18px 20px; max-width: 390px; width: 90%;
+    box-shadow: 0 8px 22px rgba(0,0,0,0.14); position: relative;
 }
 .rs-close {
-    position: absolute; top: 14px; right: 18px;
-    background: none; border: none; font-size: 1.2rem;
-    color: #888; cursor: pointer; line-height: 1;
+    position: absolute; top: 10px; right: 13px;
+    background: none; border: none; font-size: 1rem;
+    color: var(--text-3); cursor: pointer; line-height: 1;
 }
-.rs-close:hover { color: #1a0533; }
-.rs-title { font-size: 1rem; font-weight: 700; color: #1a0533; margin-bottom: 4px; }
-.rs-lane  { font-size: 0.78rem; color: #888; margin-bottom: 16px; }
-.rs-rates { display: flex; gap: 20px; margin-bottom: 16px; }
+.rs-close:hover { color: var(--text-1); }
+.rs-title { font-size: 0.83rem; font-weight: 700; color: var(--text-1); margin-bottom: 2px; }
+.rs-lane  { font-size: 0.7rem; color: var(--text-3); margin-bottom: 10px; }
+.rs-rates { display: flex; gap: 12px; margin-bottom: 10px; }
 .rs-rate-box {
-    flex: 1; background: #f9f6ff; border-radius: 8px;
-    padding: 10px 14px; text-align: center;
+    flex: 1; background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 3px; padding: 7px 11px; text-align: center;
 }
-.rs-rate-label { font-size: 0.62rem; text-transform: uppercase;
-    letter-spacing: 1px; color: #888; margin-bottom: 4px; }
-.rs-rate-val { font-size: 1.3rem; font-weight: 700; }
-.rs-rate-val.mfn  { color: #c0392b; }
-.rs-rate-val.pref { color: #12B3A3; }
+.rs-rate-label { font-size: 0.59rem; text-transform: uppercase; letter-spacing: 0.7px; color: var(--text-3); margin-bottom: 3px; }
+.rs-rate-val { font-size: 1.05rem; font-weight: 700; }
+.rs-rate-val.mfn  { color: var(--red); }
+.rs-rate-val.pref { color: var(--green); }
 .rs-honesty {
-    background: rgba(161,0,255,0.05);
-    border: 1px solid rgba(161,0,255,0.18);
-    border-radius: 8px; padding: 10px 14px;
-    font-size: 0.78rem; color: #5a3d7a; line-height: 1.55;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 3px; padding: 7px 11px;
+    font-size: 0.72rem; color: var(--text-2); line-height: 1.5;
 }
 .rs-honesty-label {
-    font-size: 0.6rem; text-transform: uppercase; letter-spacing: 1.2px;
-    font-weight: 700; color: #A100FF; margin-bottom: 4px;
+    font-size: 0.57rem; text-transform: uppercase; letter-spacing: 0.9px;
+    font-weight: 700; color: var(--accent); margin-bottom: 3px;
 }
 .rs-src-badge {
-    display: inline-block; margin-top: 10px;
-    font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 0.5px; padding: 2px 8px; border-radius: 4px;
-    background: rgba(18,179,163,0.12); color: #0e9080;
+    display: inline-block; margin-top: 7px;
+    font-size: 0.61rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.4px; padding: 1px 6px; border-radius: 2px;
+    background: rgba(13,122,91,0.10); color: var(--green);
 }
 .rate-cell-btn {
     background: none; border: none; padding: 0; margin: 0;
     cursor: pointer; font-size: inherit; color: inherit;
-    text-align: left; display: inline-flex; align-items: center; gap: 4px;
+    text-align: left; display: inline-flex; align-items: center; gap: 3px;
 }
-.rate-cell-btn:hover { text-decoration: underline dotted #A100FF; }
-.rate-cell-info { font-size: 0.65rem; color: rgba(161,0,255,0.6); }
+.rate-cell-btn:hover { text-decoration: underline dotted var(--accent); }
+.rate-cell-info { font-size: 0.61rem; color: rgba(161,0,255,0.5); }
 
-/* ── Settings industry picker ────────────────────────────── */
-.settings-section { margin-bottom: 28px; }
+/* ── Settings industry picker ───────────────────────────────── */
+.settings-section { margin-bottom: 18px; }
 .settings-section-title {
-    font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 1.5px; color: #A100FF; margin-bottom: 12px;
+    font-size: 0.64rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 1.1px; color: var(--accent); margin-bottom: 8px;
 }
 .settings-ip-item {
-    display: flex; align-items: flex-start; gap: 12px;
-    padding: 12px 16px;
-    border: 1.5px solid #eee; border-radius: 10px;
-    margin-bottom: 8px; cursor: pointer;
-    transition: border-color 0.15s, background 0.15s;
-    text-decoration: none; color: #1a0533;
+    display: flex; align-items: flex-start; gap: 9px;
+    padding: 9px 12px;
+    border: 1px solid var(--border); border-radius: 3px;
+    margin-bottom: 5px; cursor: pointer;
+    transition: border-color 0.12s, background 0.12s;
+    text-decoration: none; color: var(--text-1);
 }
-.settings-ip-item:hover { background: rgba(161,0,255,0.05); border-color: rgba(161,0,255,0.35); }
-.settings-ip-item.active { background: rgba(161,0,255,0.08); border-color: #A100FF; }
-.settings-ip-check { font-size: 1rem; margin-top: 1px; flex-shrink: 0; }
-.settings-ip-name { font-size: 0.87rem; font-weight: 600; }
-.settings-ip-desc { font-size: 0.73rem; color: #888; margin-top: 2px; }
+.settings-ip-item:hover { background: var(--accent-dim); border-color: rgba(161,0,255,0.28); }
+.settings-ip-item.active { background: var(--accent-dim); border-color: var(--accent); }
+.settings-ip-check { font-size: 0.88rem; margin-top: 1px; flex-shrink: 0; }
+.settings-ip-name { font-size: 0.78rem; font-weight: 600; }
+.settings-ip-desc { font-size: 0.67rem; color: var(--text-3); margin-top: 2px; }
+
 """
 
 # ---------------------------------------------------------------------------
@@ -1520,15 +1374,15 @@ def _sidebar_html(active_id: str = "") -> str:
     return f"""
     <nav class="sidebar">
       <div class="sidebar-brand">
-        <div class="logo-text">🌐 TradeNavigator AI</div>
+        <div class="logo-text"><i data-lucide="globe" class="nav-icon"></i> TradeNavigator AI</div>
         <div class="logo-sub">Powered by Accenture</div>
       </div>
       <div class="sidebar-nav">
-        <a href="/" class="nav-home {home_active}">🗼 Control Tower</a>
+        <a href="/" class="nav-home {home_active}"><i data-lucide="layout-dashboard" class="nav-icon"></i> Control Tower</a>
         {cluster_blocks}
       </div>
       <button class="ai-chat-trigger" onclick="openAIChat()">
-        <span class="ct-icon">🤖</span>
+        <span class="ct-icon"><i data-lucide="bot" class="nav-icon"></i></span>
         <span class="ct-label">
           AI FTA Advisor
           <small>Ask about FTA, tariffs &amp; RoO</small>
@@ -1548,6 +1402,10 @@ BASE = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{{ title }} — TradeNavigator AI</title>
 <style>{{ css }}</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
 </head>
 <body>
 <!-- ── Workspace top bar ──────────────────────────────────────── -->
@@ -1561,9 +1419,9 @@ BASE = """<!DOCTYPE html>
     </button>
     <span class="topbar-avatar-tooltip">Workspace</span>
     <div class="workspace-dropdown" id="workspaceMenu">
-      <a href="/profile" class="ws-item"><span class="ws-icon">👤</span>Profile</a>
-      <a href="/settings" class="ws-item"><span class="ws-icon">⚙️</span>Settings</a>
-      <a href="/action-logs" class="ws-item"><span class="ws-icon">🗂️</span>Action Logs</a>
+      <a href="/profile" class="ws-item"><span class="ws-icon"><i data-lucide="user"></i></span>Profile</a>
+      <a href="/settings" class="ws-item"><span class="ws-icon"><i data-lucide="settings"></i></span>Settings</a>
+      <a href="/action-logs" class="ws-item"><span class="ws-icon"><i data-lucide="folder-open"></i></span>Action Logs</a>
     </div>
   </div>
 </div>
@@ -1571,7 +1429,7 @@ BASE = """<!DOCTYPE html>
 <main class="main">
   <div class="main-content">
     {% if industry.name != 'all' %}
-    <div class="industry-context-bar">🏭 <strong>{{ industry.display_name }}</strong> — {{ industry.descriptor }}</div>
+    <div class="industry-context-bar"><i data-lucide="factory"></i><strong>{{ industry.display_name }}</strong> — {{ industry.descriptor }}</div>
     {% endif %}
     {{ content | safe }}
     <div class="footer">TradeNavigator AI &mdash; Accenture &copy; 2025</div>
@@ -1630,7 +1488,7 @@ BASE = """<!DOCTYPE html>
   <div class="ai-chat-panel">
 
     <div class="ai-chat-header">
-      <div class="ch-avatar">🤖</div>
+      <div class="ch-avatar"><i data-lucide="bot"></i></div>
       <div class="ch-title">
         <h3>AI Trade Assistant</h3>
         <span>Powered by TradeNavigator AI</span>
@@ -1640,7 +1498,7 @@ BASE = """<!DOCTYPE html>
 
     <div class="ai-chat-messages" id="chatMessages">
       <div class="chat-bubble-row bot">
-        <div class="cb-avatar">🤖</div>
+        <div class="cb-avatar"><i data-lucide="bot"></i></div>
         <div class="chat-bubble bot">
           Hi! I&#39;m your <strong>FTA Advisor</strong>. Ask me anything about
           Free Trade Agreements, Rules of Origin, preferential tariffs, or
@@ -1682,7 +1540,7 @@ BASE = """<!DOCTYPE html>
     var row = document.createElement('div');
     row.className = 'chat-bubble-row ' + (role === 'bot' ? 'bot' : 'user');
     if (role === 'bot') {
-      row.innerHTML = '<div class="cb-avatar">🤖</div>'
+      row.innerHTML = '<div class="cb-avatar"><svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="10" x="3" y="11" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><path d="M8 15h.01"/><path d="M16 15h.01"/></svg></div>'
         + '<div class="chat-bubble bot">' + html + '</div>';
     } else {
       row.innerHTML = '<div class="chat-bubble user">' + html + '</div>';
@@ -1927,6 +1785,8 @@ BASE = """<!DOCTYPE html>
   }
   loadTicker();
   setInterval(loadTicker, 10000);
+  // Initialise Lucide icons after DOM is fully built
+  if (window.lucide) lucide.createIcons();
 })();
 </script>
 
@@ -2066,7 +1926,7 @@ def control_tower():
       </div>
 
       <div class="page-header">
-      <div class="header-icon">🗼</div>
+      <div class="header-icon"><i data-lucide="layout-dashboard"></i></div>
       <div style="flex:1;">
         <div class="accent-bar" style="background:#A100FF; width:60px;"></div>
         <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap;">
@@ -2662,11 +2522,12 @@ def api_fta_explain():
             f"RVC_THRESHOLD required under {fta_name}."
         )
 
+    _action_verb = "qualifies for" if ro_status == "Qualified" else "does not qualify for" if ro_status == "Fail" else "is assessed under"
     user_prompt = (
-        f"Explain why shipment {shipment_id} ({product}, HS {hs_code}) from "
-        f"{origin} to {destination} is FTA-eligible under {fta_name}. "
+        f"Assess whether shipment {shipment_id} ({product}, HS {hs_code}) from "
+        f"{origin} to {destination} {_action_verb} {fta_name} preferential treatment. "
         f"Rules-of-origin: {roo_sentence} "
-        f"Estimated duty saving: ${est_saving_k}K. "
+        f"Estimated duty saving if qualified: ${est_saving_k}K. "
         f"State the recommended immediate action. Tone: actionable, CFO-ready."
     )
 
@@ -2676,22 +2537,38 @@ def api_fta_explain():
         if not text:
             raise ValueError("empty response")
     except Exception:
-        gap = rvc_threshold_pct - rvc_pct
         if ro_status == "Near-Miss":
+            try:
+                gap = round(float(rvc_threshold_pct) - float(rvc_pct), 1)
+            except Exception:
+                gap = "?"
             text = (
                 f"TOR_ID {shipment_id} ({product}, CCNGN {hs_code}) has RVC_PCT {rvc_pct}%, "
                 f"falling {gap} pts short of the {rvc_threshold_pct}% RVC_THRESHOLD for {fta_name}. "
                 f"A targeted sourcing adjustment or supplier invoice restructure could close the gap. "
                 f"The ${est_saving_k}K duty saving is at risk — request a revised proof-of-origin "
-                f"from the supplier (SUPPLIER_NAME) within 5 business days."
+                f"from the supplier within 5 business days."
             )
-        else:
+        elif ro_status == "Qualified":
             text = (
                 f"TOR_ID {shipment_id} ({product}, CCNGN {hs_code}) qualifies for {fta_name} "
                 f"preferential treatment: RVC_PCT {rvc_pct}% clears the {rvc_threshold_pct}% "
                 f"RVC_THRESHOLD. Claiming PREF_STATUS=E recovers an estimated ${est_saving_k}K in duty. "
                 f"Immediate action: submit the {fta_name} Certificate of Origin to customs "
                 f"within the current entry window."
+            )
+        elif ro_status == "Fail":
+            text = (
+                f"TOR_ID {shipment_id} ({product}, CCNGN {hs_code}) does NOT qualify for {fta_name} "
+                f"preferential treatment: RVC_PCT {rvc_pct}% is below the {rvc_threshold_pct}% "
+                f"RVC_THRESHOLD required. MFN duties apply. "
+                f"To improve qualification, increase regional content — review sourcing with the supplier."
+            )
+        else:
+            text = (
+                f"TOR_ID {shipment_id} ({product}, CCNGN {hs_code}) — RoO qualification "
+                f"cannot be confirmed under {fta_name} ({ro_status or 'status unknown'}). "
+                f"Upload a complete BoM and RoO rules file to enable a full assessment."
             )
 
     return jsonify({"explanation": text})
@@ -2885,6 +2762,22 @@ def fta_upload_coo():
     return redirect(url_for("agent_fta_preferential"))
 
 
+@app.route("/api/fta/upload/bom", methods=["POST"])
+def fta_upload_bom():
+    f = request.files.get("bom_file")
+    if f and f.filename:
+        fta_data_source.upload_bom_data(f.read(), f.filename)
+    return redirect(url_for("agent_fta_preferential"))
+
+
+@app.route("/api/fta/upload/roo", methods=["POST"])
+def fta_upload_roo():
+    f = request.files.get("roo_file")
+    if f and f.filename:
+        fta_data_source.upload_roo_data(f.read(), f.filename)
+    return redirect(url_for("agent_fta_preferential"))
+
+
 @app.route("/api/fta/reset", methods=["POST"])
 def fta_reset():
     fta_data_source.reset_to_empty()
@@ -2908,6 +2801,20 @@ def fta_template(which):
             headers={"Content-Disposition":
                      "attachment; filename=fta_coo_template.csv"},
         )
+    if which == "bom":
+        return Response(
+            BOM_TEMPLATE_CSV,
+            mimetype="text/csv",
+            headers={"Content-Disposition":
+                     "attachment; filename=fta_bom_template.csv"},
+        )
+    if which == "roo":
+        return Response(
+            ROO_TEMPLATE_CSV,
+            mimetype="text/csv",
+            headers={"Content-Disposition":
+                     "attachment; filename=fta_roo_rules_template.csv"},
+        )
     return ("Not found", 404)
 
 
@@ -2921,7 +2828,7 @@ def agent_fta_preferential():
     roo_items    = fta_data_source.get_roo_assessments()
     roadmap      = fta_data_source.get_qualification_roadmap()
     source       = fta_data_source.get_source_info()
-    s_msg, c_msg = fta_data_source.take_upload_messages()
+    s_msg, c_msg, b_msg, r_msg = fta_data_source.take_upload_messages()
 
     # ── Industry filtering ──────────────────────────────────────────────────
     # Apply BEFORE HTML rendering so KPIs, tables, and empty states all reflect
@@ -3005,43 +2912,39 @@ def agent_fta_preferential():
     else:
         _subtitle = 'Showing uploaded data — figures derived from your shipment and CoO files'
     header_html = (
-        '<a href="/" class="back-link">← Control Tower</a>'
-        '<div class="agent-detail-header" '
-        'style="background: linear-gradient(135deg, #1a0533 0%, #A100FF88 100%);">'
-        '<div style="font-size:2.4rem">\U0001f91d</div>'
-        '<div>'
-        '<div style="font-size:0.7rem;text-transform:uppercase;letter-spacing:1.5px;'
-        'color:#A100FF;font-weight:700;">Value Capture</div>'
-        '<h1 style="font-size:1.5rem;font-weight:700;">'
-        'FTA &amp; Preferential Trade Agent</h1>'
-        f'<div style="font-size:0.85rem;color:rgba(255,255,255,0.65);margin-top:4px;">'
-        f'{_subtitle}</div>'
-        '</div></div>'
+        '<h2 style="font-size:1rem;font-weight:700;color:#1a0533;margin-bottom:16px;">'
+        'FTA &amp; Preferential Trade Agent</h2>'
     )
 
     # ── Upload / data-source section ─────────────────────────────────────
-    # Build source badge
-    if _is_empty:
+    # Build source badge — covers all four upload types
+    _badge_parts = []
+    if source["shipment_mode"] == "uploaded":
+        _badge_parts.append(f'Shipments: {source["shipment_filename"]}')
+    if source["coo_mode"] == "uploaded":
+        _badge_parts.append(f'CoO: {source["coo_filename"]}')
+    if source.get("bom_mode") == "uploaded":
+        _badge_parts.append(f'BoM: {source.get("bom_filename", "")}')
+    if source.get("roo_mode") == "uploaded":
+        _badge_parts.append(f'RoO: {source.get("roo_filename", "")}')
+
+    if not _badge_parts:
         _src_badge = (
             '<span style="padding:2px 10px;border-radius:4px;font-size:0.68rem;'
             'font-weight:700;background:#f0eaf8;color:#999;letter-spacing:1px">'
             'NO DATA</span>'
         )
     else:
-        _parts = []
-        if source["shipment_mode"] == "uploaded":
-            _parts.append(f'Shipments: {source["shipment_filename"]}')
-        if source["coo_mode"] == "uploaded":
-            _parts.append(f'CoO: {source["coo_filename"]}')
         _src_badge = (
             '<span style="padding:2px 10px;border-radius:4px;font-size:0.68rem;'
             'font-weight:700;background:#A100FF;color:#fff;letter-spacing:1px">'
-            f'UPLOADED · {" | ".join(_parts)}</span>'
+            f'UPLOADED · {" | ".join(_badge_parts)}</span>'
         )
 
-    # Build upload feedback banners
+    # Build upload feedback banners — Shipment, CoO, BoM, RoO
     _feedback = ""
-    for _msg, _label in [(s_msg, "Shipment"), (c_msg, "CoO")]:
+    for _msg, _label in [(s_msg, "Shipment"), (c_msg, "CoO"),
+                         (b_msg, "BoM"), (r_msg, "RoO Rules")]:
         if not _msg:
             continue
         if _msg["ok"]:
@@ -3061,8 +2964,13 @@ def agent_fta_preferential():
                 f'✗ {_label} upload failed: {_err_str}</div>'
             )
 
-    # Auto-open the panel when there's a message or when already in uploaded mode
-    _panel_open = "open" if (_feedback or source["shipment_mode"] == "uploaded") else ""
+    # Auto-open the panel when there's a message or any upload is active
+    _panel_open = "open" if (
+        _feedback
+        or source["shipment_mode"] == "uploaded"
+        or source.get("bom_mode") == "uploaded"
+        or source.get("roo_mode") == "uploaded"
+    ) else ""
 
     # ── SAP source badge helper ──────────────────────────────────────────────
     def _sap_badge(label: str) -> str:
@@ -3157,6 +3065,8 @@ def agent_fta_preferential():
     _shp_req_str  = ", ".join(fta_data_source.SHIPMENT_REQUIRED)
     _shp_opt_str  = ", ".join(fta_data_source.SHIPMENT_ROO + fta_data_source.SHIPMENT_ROADMAP)
     _coo_cols_str = ", ".join(fta_data_source.COO_REQUIRED)
+    _bom_cols_str = ", ".join(fta_data_source.BOM_REQUIRED)
+    _roo_cols_str = ", ".join(fta_data_source.ROO_REQUIRED)
 
     _up_body_style = '' if _panel_open else 'display:none'
     _up_arrow      = '▼' if _panel_open else '▶'
@@ -3232,6 +3142,54 @@ def agent_fta_preferential():
         '\U0001f4e5 Template</a>'
         '</form>'
         '</div>'
+        # ── BoM upload ──
+        '<div style="border:1px solid #ede8f8;border-radius:8px;padding:14px">'
+        '<div style="font-size:0.82rem;font-weight:700;margin-bottom:4px">'
+        '\U0001f9e9 Bill of Materials <span style="font-size:0.7rem;font-weight:400;color:#999">(optional)</span>'
+        '</div>'
+        '<div style="font-size:0.72rem;color:#888;margin-bottom:10px">'
+        'Powers: BoM-based RVC computation — product_id must match shipment upload'
+        '</div>'
+        f'<details style="margin-bottom:10px"><summary style="font-size:0.7rem;'
+        f'color:#A100FF;cursor:pointer">Expected columns</summary>'
+        f'<div style="font-size:0.68rem;color:#666;margin-top:6px;line-height:1.5">'
+        f'<strong>Required:</strong> {_bom_cols_str}</div></details>'
+        '<form action="/api/fta/upload/bom" method="post" '
+        'enctype="multipart/form-data" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+        '<input type="file" name="bom_file" accept=".csv,.xlsx" '
+        'style="font-size:0.78rem;flex:1;min-width:0">'
+        '<button type="submit" style="padding:6px 14px;background:#A100FF;color:#fff;'
+        'border:none;border-radius:6px;font-size:0.78rem;font-weight:600;cursor:pointer">'
+        'Upload</button>'
+        '<a href="/api/fta/template/bom" '
+        'style="font-size:0.75rem;color:#A100FF;text-decoration:none;white-space:nowrap">'
+        '\U0001f4e5 Template</a>'
+        '</form>'
+        '</div>'
+        # ── RoO Rules upload ──
+        '<div style="border:1px solid #ede8f8;border-radius:8px;padding:14px">'
+        '<div style="font-size:0.82rem;font-weight:700;margin-bottom:4px">'
+        '\U0001f4dc Rules of Origin <span style="font-size:0.7rem;font-weight:400;color:#999">(optional)</span>'
+        '</div>'
+        '<div style="font-size:0.72rem;color:#888;margin-bottom:10px">'
+        'Powers: RoO threshold lookup — replaces roo_threshold_pct column when uploaded'
+        '</div>'
+        f'<details style="margin-bottom:10px"><summary style="font-size:0.7rem;'
+        f'color:#A100FF;cursor:pointer">Expected columns</summary>'
+        f'<div style="font-size:0.68rem;color:#666;margin-top:6px;line-height:1.5">'
+        f'<strong>Required:</strong> {_roo_cols_str}</div></details>'
+        '<form action="/api/fta/upload/roo" method="post" '
+        'enctype="multipart/form-data" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+        '<input type="file" name="roo_file" accept=".csv,.xlsx" '
+        'style="font-size:0.78rem;flex:1;min-width:0">'
+        '<button type="submit" style="padding:6px 14px;background:#A100FF;color:#fff;'
+        'border:none;border-radius:6px;font-size:0.78rem;font-weight:600;cursor:pointer">'
+        'Upload</button>'
+        '<a href="/api/fta/template/roo" '
+        'style="font-size:0.75rem;color:#A100FF;text-decoration:none;white-space:nowrap">'
+        '\U0001f4e5 Template</a>'
+        '</form>'
+        '</div>'
         '</div>'
         + (
             '<div style="margin-top:12px;padding-top:10px;border-top:1px solid #f0eaf8;'
@@ -3244,7 +3202,7 @@ def agent_fta_preferential():
             '<span style="font-size:0.68rem;color:#bbb">'
             'Removes all uploaded files and returns to the empty state</span>'
             '</div>'
-            if not _is_empty else ""
+            if _badge_parts else ""
         )
         + '</div></div>'
     )
@@ -3405,9 +3363,9 @@ def agent_fta_preferential():
         )
     for s in unclaimed:
         roo_code  = s["roo_status"]
-        roo_label = ROO_STATUS_LABELS.get(roo_code, roo_code)
+        roo_label = ROO_STATUS_LABELS.get(roo_code) or "—"
         row_bg    = "background:#fff8e6;" if roo_code == "M" else ""
-        ro_badge  = roo_badge_styles.get(roo_code, "")
+        ro_badge  = roo_badge_styles.get(roo_code, "color:#999;background:#f0f0f0")
         tor_id    = s["shipment_id"]
         saving_k  = s.get("est_saving_k") or 0.0
         origin_n  = _ctry(s["origin"])
@@ -3426,8 +3384,8 @@ def agent_fta_preferential():
             f'data-eligibility="eligible-unclaimed" '
             f'data-est-saving-k="{saving_k}" '
             f'data-ro-status="{roo_label}" '
-            f'data-rvc-pct="{s["rvc_pct"]}" '
-            f'data-rvc-threshold="{s["roo_threshold_pct"]}">'
+            f'data-rvc-pct="{s["rvc_pct"] if s["rvc_pct"] is not None else 0}" '
+            f'data-rvc-threshold="{s["roo_threshold_pct"] if s["roo_threshold_pct"] is not None else 0}">'
             f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600">{tor_id}</td>'
             f'<td style="padding:10px 12px;font-size:0.78rem;color:#666;'
             f'font-family:monospace">{entry_d}</td>'
@@ -3442,7 +3400,12 @@ def agent_fta_preferential():
             f'<span style="padding:2px 8px;border-radius:4px;font-size:0.72rem;'
             f'font-weight:600;{ro_badge}">{roo_label}</span>'
             f'<div style="font-size:0.65rem;color:#999;margin-top:3px">'
-            f'RVC {s["rvc_pct"]}% / {s["roo_threshold_pct"]}% req\'d</div></td>'
+            + (
+                f'RVC {s["rvc_pct"]}% / {s["roo_threshold_pct"]}% req\'d'
+                if s["rvc_pct"] is not None and s["roo_threshold_pct"] is not None
+                else "RVC data incomplete"
+            ) +
+            '</div></td>'
             f'<td style="padding:10px 12px;font-size:0.78rem;color:#A100FF;'
             f'font-weight:600">▶ Explain</td>'
             '</tr>'
@@ -3576,12 +3539,43 @@ def agent_fta_preferential():
                 f'color:#999;font-size:0.85rem">{_roo_empty}</td></tr>'
             )
         for p in roo_items:
-            roo_code  = p["roo_status"]
-            roo_label = ROO_STATUS_LABELS.get(roo_code, roo_code)
-            badge     = roo_badge_styles_assess.get(roo_code, "")
-            gap_cell  = (
+            roo_code = p.get("roo_status")
+            verdict  = p.get("verdict", "")
+            if roo_code in ("Q", "M", "F"):
+                roo_label = ROO_STATUS_LABELS.get(roo_code, roo_code)
+                badge     = roo_badge_styles_assess.get(roo_code, "")
+            else:
+                roo_label = verdict if verdict else "—"
+                badge     = "background:#f0f0f4;color:#52525B"
+
+            # RVC column — show value + source provenance
+            _rvc     = p.get("rvc_pct")
+            _thr     = p.get("roo_threshold_pct")
+            _rvc_src = p.get("rvc_source", "")
+            _thr_src = p.get("threshold_source", "")
+            if _rvc is not None:
+                _prov = (
+                    ' <span style="font-size:0.62rem;color:#888">(BoM)</span>'
+                    if _rvc_src == "computed_from_bom"
+                    else ' <span style="font-size:0.62rem;color:#888">(client)</span>'
+                    if _rvc_src == "client_column"
+                    else ""
+                )
+                _rvc_cell = f'{_rvc}%{_prov}'
+            else:
+                _rvc_cell = "—"
+            if _thr is not None:
+                _tprov = (
+                    ' <span style="font-size:0.62rem;color:#888">(rule)</span>'
+                    if _thr_src == "uploaded_roo_rules" else ""
+                )
+                _thr_cell = f'{_thr}%{_tprov}'
+            else:
+                _thr_cell = "—"
+
+            gap_cell = (
                 f'<span style="color:#c0392b;font-weight:600">−{p["gap_pct"]} pts</span>'
-                if p["gap_pct"] > 0 else
+                if p.get("gap_pct", 0) > 0 else
                 '<span style="color:#12B3A3;font-weight:600">—</span>'
             )
             roo_rows += (
@@ -3591,7 +3585,7 @@ def agent_fta_preferential():
                 f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:#A100FF">{p["fta_name"]}</td>'
                 f'<td style="padding:10px 12px;font-size:0.78rem;color:#555">{p["roo_test_type"]}</td>'
                 f'<td style="padding:10px 12px;font-size:0.82rem;text-align:center">'
-                f'{p["rvc_pct"]}% / {p["roo_threshold_pct"]}%</td>'
+                f'{_rvc_cell} / {_thr_cell}</td>'
                 f'<td style="padding:10px 12px;text-align:center">'
                 f'<span style="padding:2px 8px;border-radius:4px;font-size:0.72rem;'
                 f'font-weight:600;{badge}">{roo_label}</span></td>'
@@ -3599,6 +3593,17 @@ def agent_fta_preferential():
                 f'<td style="padding:10px 12px;font-size:0.78rem;color:#666">{p["compliance_note"]}</td>'
                 '</tr>'
             )
+
+        # Footer — describe active data sources
+        _roo_src_parts: list[str] = []
+        if source.get("bom_mode") == "uploaded":
+            _roo_src_parts.append("RVC: uploaded BoM")
+        if source.get("roo_mode") == "uploaded":
+            _roo_src_parts.append("thresholds: uploaded RoO rules")
+        if not _roo_src_parts:
+            _roo_src_parts.append("RVC + thresholds: client-provided shipment columns")
+        _roo_footer_text = "  ·  ".join(_roo_src_parts)
+
         roo_body = (
             '<div style="overflow-x:auto;max-height:280px;overflow-y:auto">'
             '<table style="width:100%;border-collapse:collapse">'
@@ -3616,8 +3621,8 @@ def agent_fta_preferential():
             '</table></div>'
         )
         _roo_footer = (
-            '<div style="padding:8px 16px;font-size:0.68rem;color:#bbb;border-top:1px solid #f0eaf8">'
-            'Derived from uploaded shipment data.'
+            f'<div style="padding:8px 16px;font-size:0.68rem;color:#bbb;border-top:1px solid #f0eaf8">'
+            f'{_roo_footer_text}'
             '</div>'
         )
 
@@ -4521,7 +4526,7 @@ def agent_detail(agent_id):
         # ================================================================
         body_html = f"""
         <div class="ai-summary" id="agent-ai-box">
-          <div class="ai-icon">🤖</div>
+          <div class="ai-icon"><i data-lucide="bot"></i></div>
           <div>
             <div class="ai-label">AI Agent Analysis</div>
             <div class="ai-text" id="agent-ai-text">
