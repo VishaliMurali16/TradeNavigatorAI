@@ -106,6 +106,53 @@ _ERP_COO_MAP: dict[str, str] = {
     "POO_TYPE":        "poo_type",
 }
 
+_ERP_BOM_MAP: dict[str, str] = {
+    # SAP MM / PP field names
+    "MATNR":             "product_id",
+    "MAKTX":             "product",
+    "CCNGN":             "hs_code",
+    "IDNRK":             "component",
+    "MENGE":             "component_value",
+    "CTYDP":             "component_origin",
+    # Neutral / non-SAP aliases
+    "PRODUCT_ID":        "product_id",
+    "PRODUCT_TEXT":      "product",
+    "PRODUCT_NAME":      "product",
+    "COMPONENT_ID":      "component",
+    "COMPONENT_NAME":    "component",
+    "COMPONENT_TEXT":    "component",
+    "COMPONENT_VALUE":   "component_value",
+    "COMPONENT_ORIGIN":  "component_origin",
+    "material_number":   "product_id",
+    "material":          "product_id",
+    "description":       "product",
+    "hs":                "hs_code",
+    "value":             "component_value",
+    "origin":            "component_origin",
+    "country_of_origin": "component_origin",
+}
+
+_ERP_ROO_MAP: dict[str, str] = {
+    # SAP GTS field names
+    "AGREEMENT":         "fta_name",
+    "CCNGN_PREFIX":      "hs_code_prefix",
+    "ROO_METHOD":        "rule_method",
+    "RVC_THRESHOLD":     "rvc_threshold_pct",
+    # Neutral / non-SAP aliases
+    "FTA_NAME":          "fta_name",
+    "HS_CODE_PREFIX":    "hs_code_prefix",
+    "RULE_METHOD":       "rule_method",
+    "RVC_THRESHOLD_PCT": "rvc_threshold_pct",
+    "NOTES":             "notes",
+    "NOTE":              "notes",
+    "trade_deal":        "fta_name",
+    "agreement":         "fta_name",
+    "hs_prefix":         "hs_code_prefix",
+    "method":            "rule_method",
+    "threshold_pct":     "rvc_threshold_pct",
+    "threshold":         "rvc_threshold_pct",
+}
+
 
 # ── Column specification (post-rename, snake_case) ────────────────────────────
 
@@ -150,6 +197,24 @@ COO_REQUIRED: list[str] = [
     "status",         # POO_STATUS — PENDING|RECEIVED|OVERDUE|VALIDATED
 ]
 
+# Required columns for the Bill of Materials upload (post-rename, snake_case).
+BOM_REQUIRED: list[str] = [
+    "product_id",        # MATNR — SAP material number / internal product key
+    "product",           # MAKTX — product description
+    "hs_code",           # CCNGN — HS classification of the finished product
+    "component",         # IDNRK — component / ingredient description
+    "component_value",   # MENGE — transaction value of this component (USD)
+    "component_origin",  # CTYDP — ISO 3166-1 alpha-2 country of origin for the component
+]
+
+# Required columns for the Rules-of-Origin rules upload (post-rename, snake_case).
+ROO_REQUIRED: list[str] = [
+    "fta_name",          # AGREEMENT — FTA name matching shipment upload (e.g. KORUS, USMCA)
+    "hs_code_prefix",    # CCNGN_PREFIX — HS chapter/heading/subheading prefix (e.g. "0406" or "84")
+    "rule_method",       # ROO_METHOD — RVC, CTC, or specific rule description
+    "rvc_threshold_pct", # RVC_THRESHOLD — minimum qualifying RVC percentage
+]
+
 # ── Downloadable template CSV ─────────────────────────────────────────────────
 # Uses SAP-native column names.  See fta_simulator.FIELD_DICTIONARY for
 # provenance marks.  Row values are illustrative benchmark data only.
@@ -187,6 +252,35 @@ SUPPLIER_NAME,CTYDP,CTYAR,VDECL_REQ_DATE,VDECL_DEADLINE,POO_STATUS,POO_TYPE
 Seoul Dairy Co,KR,US,20260705,20260807,OVERDUE,EUR.1
 Busan Foods Ltd,KR,US,20260712,20260812,PENDING,EUR.1
 Hanoi Tech JSC,VN,US,20260718,20260818,RECEIVED,FORM-E
+"""
+
+# ── BoM template — snake_case column names (ready to upload without mapping) ─
+# product_id must match product_id in the shipment upload for BoM-based RVC to link.
+# component_origin must be ISO 3166-1 alpha-2 (e.g. KR, US, CN).
+# component_value is the transaction value (any currency, consistent within a product_id).
+BOM_TEMPLATE_CSV = """\
+product_id,product,hs_code,component,component_value,component_origin
+SMP-001,Aged Cheddar,0406.90,Whole Milk (domestic),1600.00,KR
+SMP-001,Aged Cheddar,0406.90,Rennet (import),200.00,NZ
+SMP-001,Aged Cheddar,0406.90,Bacterial Cultures (import),200.00,NZ
+SMP-002,Gouda Cheese Blend,0406.90,Whole Milk (domestic),1200.00,KR
+SMP-002,Gouda Cheese Blend,0406.90,Rennet (import),150.00,NZ
+SMP-002,Gouda Cheese Blend,0406.90,Starter Cultures (import),150.00,NZ
+SMP-004,Laptop Computer,8471.30,CPU and Chipset,380.00,CN
+SMP-004,Laptop Computer,8471.30,LCD Screen and Backlight,210.00,CN
+SMP-004,Laptop Computer,8471.30,Lithium Battery Pack,90.00,CN
+"""
+
+# ── RoO rules template — snake_case column names ──────────────────────────────
+# fta_name must match the AGREEMENT/fta_name values in the shipment upload exactly.
+# hs_code_prefix is matched as a prefix against the shipment HS code (strips dots and spaces).
+# rvc_threshold_pct is the minimum RVC% for preferential qualification.
+ROO_TEMPLATE_CSV = """\
+fta_name,hs_code_prefix,rule_method,rvc_threshold_pct,notes
+KORUS,0406,RVC,45,KORUS dairy — Regional Value Content threshold (HTSUS 0406)
+KORUS,8471,RVC,45,KORUS computers — Regional Value Content threshold
+USMCA,8708,RVC,60,USMCA auto-parts — tariff preference rule (HTSUS 8708)
+EVFTA,8542,RVC,40,EU-Vietnam FTA electronics — RVC requirement (HS 8542)
 """
 
 # ── Generic qualification actions keyed by FTA name ──────────────────────────
@@ -491,6 +585,22 @@ def _enrich_lanes_from_aggregator(lanes: list[dict]) -> list[dict]:
     return result
 
 
+# ── FTA member country sets for BoM-based RVC computation ────────────────────
+# ISO 3166-1 alpha-2 codes.  Add new FTAs here to enable computation.
+# FTAs absent from this dict → "cannot compute — FTA members not encoded for <name>".
+
+_EU_MEMBERS: frozenset = frozenset({
+    "AT", "BE", "BG", "CY", "CZ", "DE", "DK", "EE", "ES", "FI", "FR",
+    "GR", "HR", "HU", "IE", "IT", "LT", "LU", "LV", "MT", "NL", "PL",
+    "PT", "RO", "SE", "SI", "SK",
+})
+
+_FTA_MEMBER_SETS: dict[str, frozenset] = {
+    "KORUS":  frozenset({"US", "KR"}),
+    "USMCA":  frozenset({"US", "MX", "CA"}),
+    "EVFTA":  frozenset({"VN"}) | _EU_MEMBERS,
+}
+
 # ── Thread-safe in-memory state ───────────────────────────────────────────────
 
 _lock = threading.Lock()
@@ -498,18 +608,26 @@ _state: dict[str, Any] = {
     # "empty" | "uploaded"  — tracked independently per data type
     "shipment_mode":        "empty",
     "coo_mode":             "empty",
+    "bom_mode":             "empty",
+    "roo_mode":             "empty",
     # Normalised pandas DataFrames (None when in simulated mode)
     "shipment_df":          None,
     "coo_df":               None,
+    "bom_df":               None,
+    "roo_df":               None,
     # Original filenames for UI display
     "shipment_filename":    None,
     "coo_filename":         None,
+    "bom_filename":         None,
+    "roo_filename":         None,
     # Which optional column groups were present in the last upload
     "shipment_has_roo":     False,
     "shipment_has_roadmap": False,
     # Last upload result — read-once by the page on next GET
     "upload_shipment_msg":  None,   # {"ok": bool, "errors": [...], "warnings": [...]}
     "upload_coo_msg":       None,
+    "upload_bom_msg":       None,
+    "upload_roo_msg":       None,
 }
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -534,8 +652,13 @@ def _normalise_dats(raw) -> str:
 def _parse_file(file_bytes: bytes, filename: str) -> pd.DataFrame:
     """Deserialise CSV or XLSX bytes into a DataFrame.  Raises ValueError on bad format."""
     fn = filename.lower()
-    # Preserve leading zeros for HS codes in both ERP format (CCNGN) and snake_case (hs_code).
-    _hs_str = {"CCNGN": str, "hs_code": str}
+    # Preserve leading zeros for HS codes / prefixes across all upload types.
+    _hs_str = {
+        "CCNGN":          str,
+        "hs_code":        str,
+        "CCNGN_PREFIX":   str,
+        "hs_code_prefix": str,
+    }
     if fn.endswith(".csv"):
         return pd.read_csv(io.BytesIO(file_bytes), dtype=_hs_str)
     if fn.endswith((".xlsx", ".xls")):
@@ -648,9 +771,86 @@ def _validate_coo(df: pd.DataFrame) -> tuple[bool, list[str], list[str]]:
     return len(errors) == 0, errors, warnings
 
 
+def _validate_bom(
+    df: pd.DataFrame,
+) -> "tuple[bool, list[str], list[str]]":
+    """Validate a normalised (snake_case) BoM DataFrame.
+    Returns (ok, errors, warnings).
+    """
+    errors:   list[str] = []
+    warnings: list[str] = []
+
+    if df.empty:
+        errors.append("File contains no data rows.")
+        return False, errors, warnings
+
+    missing = [c for c in BOM_REQUIRED if c not in df.columns]
+    if missing:
+        errors.append(f"Missing required columns: {', '.join(missing)}")
+        return False, errors, warnings
+
+    # Warn about blank component_value or component_origin rows (per-product detail)
+    val_blank = int(
+        df["component_value"].isna().sum()
+        + (~df["component_value"].isna()
+           & (df["component_value"].astype(str).str.strip() == "")).sum()
+    )
+    ori_blank = int(
+        df["component_origin"].isna().sum()
+        + (~df["component_origin"].isna()
+           & (df["component_origin"].astype(str).str.strip() == "")).sum()
+    )
+    if val_blank:
+        warnings.append(
+            f"{val_blank} row(s) have blank component_value — "
+            "those products will show 'RVC incomplete — qualification cannot be confirmed'."
+        )
+    if ori_blank:
+        warnings.append(
+            f"{ori_blank} row(s) have blank component_origin — "
+            "those products will show 'RVC incomplete — qualification cannot be confirmed'."
+        )
+
+    return True, errors, warnings
+
+
+def _validate_roo(
+    df: pd.DataFrame,
+) -> "tuple[bool, list[str], list[str]]":
+    """Validate a normalised (snake_case) RoO rules DataFrame.
+    Returns (ok, errors, warnings).
+    """
+    errors:   list[str] = []
+    warnings: list[str] = []
+
+    if df.empty:
+        errors.append("File contains no data rows.")
+        return False, errors, warnings
+
+    missing = [c for c in ROO_REQUIRED if c not in df.columns]
+    if missing:
+        errors.append(f"Missing required columns: {', '.join(missing)}")
+        return False, errors, warnings
+
+    non_numeric = pd.to_numeric(df["rvc_threshold_pct"], errors="coerce").isna()
+    if non_numeric.any():
+        bad = df.loc[non_numeric, "rvc_threshold_pct"].tolist()[:3]
+        warnings.append(
+            f"rvc_threshold_pct has non-numeric values {bad!r} — "
+            "affected rules will be skipped during RVC qualification."
+        )
+
+    return True, errors, warnings
+
+
 # ── Data derivation: uploaded DataFrame → internal dicts ─────────────────────
 
-def _derive_shipments(df: pd.DataFrame, has_roo: bool) -> list[dict]:
+def _derive_shipments(
+    df: pd.DataFrame,
+    has_roo: bool,
+    bom_df: "pd.DataFrame | None" = None,
+    roo_df: "pd.DataFrame | None" = None,
+) -> list[dict]:
     """Map normalised (snake_case) shipment DataFrame to internal dict schema."""
     result: list[dict] = []
     _elig_map = {"E": "eligible-claimed", "U": "eligible-unclaimed", "N": "not-eligible"}
@@ -671,19 +871,36 @@ def _derive_shipments(df: pd.DataFrame, has_roo: bool) -> list[dict]:
             if mfn_val is not None and pref_val is not None else None
         )
 
-        if has_roo:
-            rvc_raw = row.get("rvc_pct")
-            thr_raw = row.get("roo_threshold_pct")
-            if pd.notna(rvc_raw) and pd.notna(thr_raw):
-                rvc = float(rvc_raw)
-                thr = float(thr_raw)
-                roo = _ro_status(rvc, thr)
-            else:
-                rvc, thr = 0.0, 0.0
-                roo = "Q" if pref_s == "E" else "F"
-        else:
-            rvc, thr = 0.0, 0.0
-            roo = "Q" if pref_s == "E" else "F"
+        # Determine product_id for BoM lookup
+        _pid = ""
+        for _col in ("product_id", "shipment_id"):
+            _v = str(row.get(_col, "")).strip()
+            if _v and _v not in {"—", "nan"}:
+                _pid = _v
+                break
+        # Column fallback values — only when BoM/rules not uploaded
+        _rvc_col = (
+            float(row["rvc_pct"])
+            if bom_df is None and has_roo and pd.notna(row.get("rvc_pct"))
+            else None
+        )
+        _thr_col = (
+            float(row["roo_threshold_pct"])
+            if roo_df is None and has_roo and pd.notna(row.get("roo_threshold_pct"))
+            else None
+        )
+        resolved = _resolve_roo(
+            product_id=_pid,
+            fta_name=str(row.get("fta_name", "N/A")),
+            hs_code=str(row.get("hs_code", "")),
+            bom_df=bom_df,
+            roo_df=roo_df,
+            rvc_col=_rvc_col,
+            thr_col=_thr_col,
+        )
+        rvc = resolved["rvc_pct"]
+        thr = resolved["roo_threshold_pct"]
+        roo = resolved["roo_status"]
 
         raw_date   = row.get("entry_date", "")
         entry_date = _normalise_dats(raw_date) if pd.notna(raw_date) and raw_date != "" else "00000000"
@@ -705,9 +922,9 @@ def _derive_shipments(df: pd.DataFrame, has_roo: bool) -> list[dict]:
             "preferential_rate":    pref_val,
             "claimed_status":       pref_s,
             "eligibility":          _elig_map.get(pref_s, "not-eligible"),
-            "rvc_pct":              rvc,
-            "roo_threshold_pct":    thr,
-            "roo_status":           roo,
+            "rvc_pct":              rvc,          # float | None
+            "roo_threshold_pct":    thr,          # float | None
+            "roo_status":           roo,          # Q/M/F | None
             "supplier_id":          str(row.get("supplier_id",          "—")),
             "supplier_name":        str(row.get("supplier_name",        "—")),
             "bom_regional_content": float(row.get("bom_regional_content", 0) or 0),
@@ -840,6 +1057,353 @@ def _derive_roo_assessments(df: pd.DataFrame) -> list[dict]:
     return result
 
 
+def _compute_bom_rvc(
+    bom_df: pd.DataFrame,
+    product_id: str,
+    fta_name: str,
+) -> dict:
+    """
+    Compute RVC% for one product_id from the BoM DataFrame.
+
+    Completeness guard: if ANY component_value or component_origin is blank
+    for this product, refuses to compute — a wrong 'Qualifies' is worse than
+    'incomplete'.
+
+    Returns one of:
+      {"ok": True,  "rvc_pct": float, "rvc_source": "computed_from_bom"}
+      {"ok": False, "rvc_pct": None,  "rvc_source": "computed_from_bom", "reason": str}
+    """
+    rows = bom_df[
+        bom_df["product_id"].astype(str).str.strip() == str(product_id).strip()
+    ]
+
+    if rows.empty:
+        return {
+            "ok": False, "rvc_pct": None, "rvc_source": "computed_from_bom",
+            "reason": f"product_id '{product_id}' not found in BoM",
+        }
+
+    # Completeness guard: any blank value or origin → refuse to compute
+    val_blank = rows["component_value"].isna() | (
+        rows["component_value"].astype(str).str.strip() == ""
+    )
+    ori_blank = rows["component_origin"].isna() | (
+        rows["component_origin"].astype(str).str.strip() == ""
+    )
+    if val_blank.any() or ori_blank.any():
+        return {
+            "ok": False, "rvc_pct": None, "rvc_source": "computed_from_bom",
+            "reason": "RVC incomplete — qualification cannot be confirmed",
+        }
+
+    member_set = _FTA_MEMBER_SETS.get(str(fta_name).strip())
+    if member_set is None:
+        return {
+            "ok": False, "rvc_pct": None, "rvc_source": "computed_from_bom",
+            "reason": f"cannot compute — FTA members not encoded for {fta_name}",
+        }
+
+    try:
+        vals = rows["component_value"].astype(float)
+    except Exception:
+        return {
+            "ok": False, "rvc_pct": None, "rvc_source": "computed_from_bom",
+            "reason": "RVC incomplete — component_value contains non-numeric data",
+        }
+
+    total = vals.sum()
+    if total == 0:
+        return {
+            "ok": False, "rvc_pct": None, "rvc_source": "computed_from_bom",
+            "reason": "RVC incomplete — total component value is zero",
+        }
+
+    origins    = rows["component_origin"].astype(str).str.strip().str.upper()
+    qualifying = vals[origins.isin(member_set)].sum()
+    rvc_pct    = round(float(qualifying) / float(total) * 100, 1)
+
+    return {
+        "ok": True, "rvc_pct": rvc_pct, "rvc_source": "computed_from_bom", "reason": None,
+    }
+
+
+def _lookup_roo_threshold(
+    roo_df: pd.DataFrame,
+    fta_name: str,
+    hs_code: str,
+) -> dict:
+    """
+    Find the best-matching RoO rule for (fta_name, hs_code).
+    Matches by fta_name (exact, case-insensitive) and longest hs_code_prefix
+    that is a prefix of hs_code (dots and spaces stripped before comparison).
+
+    Returns one of:
+      {"ok": True,  "rvc_threshold_pct": float, "rule_method": str, "threshold_source": "uploaded_roo_rules"}
+      {"ok": False, "rvc_threshold_pct": None,  "threshold_source": "no_rule", "reason": str}
+    """
+    fta_rows = roo_df[
+        roo_df["fta_name"].astype(str).str.strip().str.upper()
+        == str(fta_name).strip().upper()
+    ]
+
+    if fta_rows.empty:
+        return {
+            "ok": False, "rvc_threshold_pct": None,
+            "threshold_source": "no_rule",
+            "reason": f"no RoO rule uploaded for FTA '{fta_name}'",
+        }
+
+    hs_clean  = str(hs_code).replace(".", "").replace(" ", "")
+    best_thr: float | None  = None
+    best_method: str        = "RVC"
+    best_len: int           = -1
+
+    for _, rule in fta_rows.iterrows():
+        prefix = str(rule.get("hs_code_prefix", "")).replace(".", "").replace(" ", "").strip()
+        if not prefix:
+            continue
+        if hs_clean.startswith(prefix) and len(prefix) > best_len:
+            try:
+                thr = float(rule["rvc_threshold_pct"])
+            except (ValueError, TypeError):
+                continue
+            best_thr    = thr
+            best_method = str(rule.get("rule_method", "RVC"))
+            best_len    = len(prefix)
+
+    if best_thr is None:
+        return {
+            "ok": False, "rvc_threshold_pct": None,
+            "threshold_source": "no_rule",
+            "reason": f"no RoO rule uploaded for HS {hs_code} under {fta_name}",
+        }
+
+    return {
+        "ok": True, "rvc_threshold_pct": best_thr,
+        "rule_method": best_method,
+        "threshold_source": "uploaded_roo_rules",
+        "reason": None,
+    }
+
+
+def _resolve_roo(
+    product_id: str,
+    fta_name: str,
+    hs_code: str,
+    bom_df: "pd.DataFrame | None",
+    roo_df: "pd.DataFrame | None",
+    rvc_col: "float | None" = None,
+    thr_col: "float | None" = None,
+) -> dict:
+    """
+    Single source of truth for RVC%, threshold, and verdict for one
+    (product_id, fta_name, hs_code) triple.  Both _derive_shipments() and
+    _derive_roo_assessments_enhanced() call this so the two tables can never
+    disagree about the same product.
+
+    Precedence:
+      RVC       — BoM via _compute_bom_rvc() > rvc_col (pre-aggregated column value)
+      Threshold — uploaded rules via _lookup_roo_threshold() > thr_col (column value)
+
+    Returns a dict with keys:
+      rvc_pct, roo_threshold_pct, roo_status (Q/M/F or None),
+      rvc_source, threshold_source, verdict, gap_pct, rule_method,
+      rvc_reason, threshold_reason  (for provenance labels in the enhanced path)
+    """
+    # ── RVC ──────────────────────────────────────────────────────────────────
+    rvc_pct:    float | None = None
+    rvc_source: str          = "unavailable"
+    rvc_reason: str | None   = None
+
+    if bom_df is not None:
+        rvc_source = "computed_from_bom"
+        if product_id:
+            bom_res = _compute_bom_rvc(bom_df, product_id, fta_name)
+            if bom_res["ok"]:
+                rvc_pct = bom_res["rvc_pct"]
+            else:
+                rvc_reason = bom_res["reason"]
+        else:
+            rvc_reason = "product_id not found in shipment data — BoM lookup unavailable"
+    elif rvc_col is not None:
+        rvc_pct    = rvc_col
+        rvc_source = "client_column"
+
+    # ── Threshold ─────────────────────────────────────────────────────────────
+    rvc_threshold:    float | None = None
+    threshold_source: str          = "no_rule"
+    threshold_reason: str | None   = None
+    rule_method:      str          = "Regional Value Content"
+
+    if roo_df is not None:
+        thr_res = _lookup_roo_threshold(roo_df, fta_name, hs_code)
+        threshold_source = thr_res["threshold_source"]
+        if thr_res["ok"]:
+            rvc_threshold = thr_res["rvc_threshold_pct"]
+            rule_method   = thr_res.get("rule_method", "RVC")
+        else:
+            threshold_reason = thr_res["reason"]
+    elif thr_col is not None:
+        rvc_threshold    = thr_col
+        threshold_source = "client_column"
+
+    # ── Verdict ───────────────────────────────────────────────────────────────
+    roo_status: str | None = None
+    gap_pct:    float      = 0.0
+    verdict:    str        = ""
+
+    if rvc_reason:
+        verdict = rvc_reason
+    elif rvc_threshold is None:
+        verdict = "No RoO rule uploaded"
+    elif threshold_reason and threshold_source == "no_rule":
+        verdict = "No RoO rule uploaded"
+    else:
+        gap_pct    = round(max(0.0, rvc_threshold - rvc_pct), 1)
+        roo_status = _ro_status(rvc_pct, rvc_threshold)
+        verdict    = (
+            "Qualifies"         if roo_status == "Q" else
+            "Near-Miss"         if roo_status == "M" else
+            "Does not qualify"
+        )
+
+    return {
+        "rvc_pct":           rvc_pct,
+        "roo_threshold_pct": rvc_threshold,
+        "roo_status":        roo_status,
+        "rvc_source":        rvc_source,
+        "threshold_source":  threshold_source,
+        "verdict":           verdict,
+        "gap_pct":           gap_pct,
+        "rule_method":       rule_method,
+        "rvc_reason":        rvc_reason,
+        "threshold_reason":  threshold_reason,
+    }
+
+
+def _derive_roo_assessments_enhanced(
+    df: pd.DataFrame,
+    has_roo_cols: bool,
+    bom_df: "pd.DataFrame | None",
+    roo_df: "pd.DataFrame | None",
+) -> list[dict]:
+    """
+    RoO assessment with BoM-computed RVC and uploaded-rules threshold.
+
+    Precedence:
+      RVC       — BoM (per product_id / shipment_id) > shipment rvc_pct column
+      Threshold — uploaded RoO rules (longest-prefix match) > shipment roo_threshold_pct column
+
+    Honesty constraints:
+      - Incomplete BoM (any blank component value/origin) → roo_status=None, reason shown
+      - No rule for FTA/HS → roo_status=None, "no RoO rule uploaded"
+      - Never fabricate a component or threshold
+    """
+    result: list[dict] = []
+
+    for (product, hs, fta), grp in df.groupby(
+        ["product", "hs_code", "fta_name"], sort=False
+    ):
+        # ── Product ID for BoM lookup ──────────────────────────────────────────
+        _pid: str = ""
+        for _col in ("product_id", "shipment_id"):
+            if _col in grp.columns:
+                _cands = grp[_col].dropna().astype(str).str.strip()
+                _cands = _cands[~_cands.isin({"", "—", "nan"})]
+                if not _cands.empty:
+                    _pid = _cands.iloc[0]
+                    break
+
+        # ── Pre-compute column fallbacks (used only when BoM/rules not uploaded) ─
+        _rvc_col: "float | None" = None
+        _thr_col: "float | None" = None
+        if bom_df is None and has_roo_cols:
+            valid = grp[grp["rvc_pct"].notna()]
+            if not valid.empty:
+                v_sum    = valid["value"].sum()
+                _rvc_col = round(
+                    (valid["value"] * valid["rvc_pct"]).sum() / v_sum
+                    if v_sum else valid["rvc_pct"].mean(),
+                    1,
+                )
+        if roo_df is None and has_roo_cols:
+            valid_thr = grp[grp["roo_threshold_pct"].notna()]
+            if not valid_thr.empty:
+                _thr_col = float(valid_thr["roo_threshold_pct"].mode().iloc[0])
+
+        # ── Shared resolver (same logic as _derive_shipments) ─────────────────
+        resolved         = _resolve_roo(_pid, fta, hs, bom_df, roo_df, _rvc_col, _thr_col)
+        rvc_pct          = resolved["rvc_pct"]
+        rvc_source       = resolved["rvc_source"]
+        rvc_reason       = resolved["rvc_reason"]
+        rvc_threshold    = resolved["roo_threshold_pct"]
+        threshold_source = resolved["threshold_source"]
+        threshold_reason = resolved["threshold_reason"]
+        roo_status       = resolved["roo_status"]
+        gap_pct          = resolved["gap_pct"]
+        rule_method      = resolved["rule_method"]
+        verdict          = resolved["verdict"]
+
+        # ── Provenance display labels ──────────────────────────────────────────
+        _rvc_lbl = (
+            f"{rvc_pct}% (from BoM)" if rvc_source == "computed_from_bom"
+            else f"{rvc_pct}% (client-provided)"
+        ) if rvc_pct is not None else "—"
+
+        _thr_lbl = (
+            f"{rvc_threshold}% (uploaded rule)" if threshold_source == "uploaded_roo_rules"
+            else f"{rvc_threshold}% (client-provided)"
+        ) if rvc_threshold is not None else "—"
+
+        # ── Compliance note ────────────────────────────────────────────────────
+        compliance_note: str = ""
+        if rvc_reason:
+            compliance_note = f"RVC: {rvc_reason}. Threshold: {_thr_lbl}."
+        elif verdict == "No RoO rule uploaded":
+            compliance_note = (
+                f"RVC {_rvc_lbl}. {threshold_reason}."
+                if threshold_reason
+                else f"RVC {_rvc_lbl}. No RoO threshold — upload a RoO rules file."
+            )
+        elif roo_status == "Q":
+            compliance_note = (
+                f"RVC {_rvc_lbl} meets {_thr_lbl} threshold — "
+                "maintain CoO documentation."
+            )
+        elif roo_status == "M":
+            compliance_note = (
+                f"RVC {_rvc_lbl} is within {gap_pct}% of {_thr_lbl} threshold — "
+                "minor BOM adjustments may qualify this product."
+            )
+        else:
+            compliance_note = (
+                f"RVC {_rvc_lbl} is {gap_pct}% below {_thr_lbl} threshold — "
+                "significant sourcing changes required."
+            )
+
+        if roo_status and "supplier_name" in df.columns:
+            suppliers = list(grp["supplier_name"].dropna().unique())[:3]
+            if suppliers:
+                compliance_note += f" Suppliers: {', '.join(str(s) for s in suppliers)}."
+
+        result.append({
+            "product":           str(product),
+            "hs_code":           str(hs),
+            "fta_name":          str(fta),
+            "roo_test_type":     rule_method,
+            "rvc_pct":           rvc_pct,
+            "roo_threshold_pct": rvc_threshold,
+            "roo_status":        roo_status,
+            "verdict":           verdict,
+            "gap_pct":           gap_pct,
+            "compliance_note":   compliance_note,
+            "rvc_source":        rvc_source,
+            "threshold_source":  threshold_source,
+        })
+
+    return result
+
+
 def _derive_qualification_roadmap(
     lanes: list[dict], df: pd.DataFrame, has_roadmap: bool
 ) -> list[dict]:
@@ -917,8 +1481,12 @@ def get_source_info() -> dict:
         return {
             "shipment_mode":        _state["shipment_mode"],
             "coo_mode":             _state["coo_mode"],
+            "bom_mode":             _state["bom_mode"],
+            "roo_mode":             _state["roo_mode"],
             "shipment_filename":    _state["shipment_filename"],
             "coo_filename":         _state["coo_filename"],
+            "bom_filename":         _state["bom_filename"],
+            "roo_filename":         _state["roo_filename"],
             "has_roo":              _state["shipment_has_roo"],
             "has_roadmap":          _state["shipment_has_roadmap"],
             "roo_missing_cols":     [c for c in SHIPMENT_ROO
@@ -928,14 +1496,18 @@ def get_source_info() -> dict:
         }
 
 
-def take_upload_messages() -> tuple[dict | None, dict | None]:
-    """Return and clear pending upload result messages (shipment_msg, coo_msg)."""
+def take_upload_messages() -> "tuple[dict | None, dict | None, dict | None, dict | None]":
+    """Return and clear pending upload result messages (shipment, coo, bom, roo)."""
     with _lock:
         s_msg = _state["upload_shipment_msg"]
         c_msg = _state["upload_coo_msg"]
+        b_msg = _state["upload_bom_msg"]
+        r_msg = _state["upload_roo_msg"]
         _state["upload_shipment_msg"] = None
         _state["upload_coo_msg"]      = None
-    return s_msg, c_msg
+        _state["upload_bom_msg"]      = None
+        _state["upload_roo_msg"]      = None
+    return s_msg, c_msg, b_msg, r_msg
 
 
 def reset_to_empty() -> None:
@@ -944,14 +1516,22 @@ def reset_to_empty() -> None:
         _state.update({
             "shipment_mode":        "empty",
             "coo_mode":             "empty",
+            "bom_mode":             "empty",
+            "roo_mode":             "empty",
             "shipment_df":          None,
             "coo_df":               None,
+            "bom_df":               None,
+            "roo_df":               None,
             "shipment_filename":    None,
             "coo_filename":         None,
+            "bom_filename":         None,
+            "roo_filename":         None,
             "shipment_has_roo":     False,
             "shipment_has_roadmap": False,
             "upload_shipment_msg":  None,
             "upload_coo_msg":       None,
+            "upload_bom_msg":       None,
+            "upload_roo_msg":       None,
         })
 
 
@@ -1025,6 +1605,80 @@ def upload_coo_data(file_bytes: bytes, filename: str) -> dict:
     result = {"ok": ok, "errors": errors, "warnings": warnings}
     with _lock:
         _state["upload_coo_msg"] = result
+    return result
+
+
+def upload_bom_data(file_bytes: bytes, filename: str) -> dict:
+    """
+    Parse, validate and store Bill of Materials data.
+    Returns {"ok", "errors", "warnings"}.
+    On success, switches bom_mode to "uploaded".
+    """
+    try:
+        raw_df = _parse_file(file_bytes, filename)
+    except Exception as exc:
+        result: dict = {"ok": False, "errors": [str(exc)], "warnings": []}
+        with _lock:
+            _state["upload_bom_msg"] = result
+        return result
+
+    df = _normalise_cols(raw_df)
+    df = _rename_erp_cols(df, _ERP_BOM_MAP)
+    # _normalise_coded_values is a no-op for BoM but keeps pipeline order consistent
+    df, norm_infos, norm_warns = _normalise_coded_values(df)
+    ok, errors, warnings = _validate_bom(df)
+    warnings = norm_infos + norm_warns + warnings
+
+    if ok:
+        df = df.copy()
+        df["component_value"] = pd.to_numeric(df["component_value"], errors="coerce")
+        with _lock:
+            _state.update({
+                "bom_mode":     "uploaded",
+                "bom_df":       df,
+                "bom_filename": filename,
+            })
+
+    result = {"ok": ok, "errors": errors, "warnings": warnings}
+    with _lock:
+        _state["upload_bom_msg"] = result
+    return result
+
+
+def upload_roo_data(file_bytes: bytes, filename: str) -> dict:
+    """
+    Parse, validate and store Rules-of-Origin rules data.
+    Returns {"ok", "errors", "warnings"}.
+    On success, switches roo_mode to "uploaded".
+    """
+    try:
+        raw_df = _parse_file(file_bytes, filename)
+    except Exception as exc:
+        result: dict = {"ok": False, "errors": [str(exc)], "warnings": []}
+        with _lock:
+            _state["upload_roo_msg"] = result
+        return result
+
+    df = _normalise_cols(raw_df)
+    df = _rename_erp_cols(df, _ERP_ROO_MAP)
+    # _normalise_coded_values is a no-op for RoO rules but keeps pipeline order consistent
+    df, norm_infos, norm_warns = _normalise_coded_values(df)
+    ok, errors, warnings = _validate_roo(df)
+    warnings = norm_infos + norm_warns + warnings
+
+    if ok:
+        df = df.copy()
+        df["rvc_threshold_pct"] = pd.to_numeric(df["rvc_threshold_pct"], errors="coerce")
+        with _lock:
+            _state.update({
+                "roo_mode":     "uploaded",
+                "roo_df":       df,
+                "roo_filename": filename,
+            })
+
+    result = {"ok": ok, "errors": errors, "warnings": warnings}
+    with _lock:
+        _state["upload_roo_msg"] = result
     return result
 
 
@@ -1129,27 +1783,57 @@ def get_fta_shipments() -> list:
         mode    = _state["shipment_mode"]
         df      = _state["shipment_df"]
         has_roo = _state["shipment_has_roo"]
+        bom_df  = _state["bom_df"] if _state["bom_mode"] == "uploaded" else None
+        roo_df  = _state["roo_df"] if _state["roo_mode"] == "uploaded" else None
     if mode != "uploaded":
         return []
 
-    shipments = _derive_shipments(df, has_roo)
+    shipments = _derive_shipments(df, has_roo, bom_df, roo_df)
 
-    # Re-derive est_saving_k from aggregator rates (FIX 1: all rate-derived figures
-    # move together). _enriched_rates is populated by get_fta_lanes(); it only
-    # contains lanes where the aggregator supplied both MFN and pref rates.
-    rates = _enriched_rates
-    if not rates:
+    # Compute est_saving_k per shipment using per-HS aggregator rates so that
+    # accessory lanes with different MFN rates (e.g. 4202.12 @ 5.7% vs 8544.42 @ 2.6%)
+    # each use their own rate rather than a single lane-representative rate.
+    # Lookup precedence:
+    #   1. Per-HS direct store query (agg._store.get(hs6, origin, destination, today))
+    #   2. Lane-level rate cached in _enriched_rates (fallback)
+    from datetime import date as _date
+    agg        = _get_aggregator()
+    today      = _date.today()
+    lane_rates = _enriched_rates
+
+    if agg is None and not lane_rates:
         return shipments
 
     result = []
     for s in shipments:
-        key      = (s["fta_name"], s["origin"], s["destination"])
-        enriched = rates.get(key)
-        if enriched and s["eligibility"] == "eligible-unclaimed":
-            s    = dict(s)
-            mfn  = enriched["mfn_rate_pct"]
-            pref = enriched["preferential_rate_pct"]
+        if s["eligibility"] != "eligible-unclaimed":
+            result.append(s)
+            continue
+
+        mfn = pref = None
+
+        # 1. Per-HS store lookup
+        if agg:
+            hs6 = "".join(c for c in str(s["hs_code"]) if c.isdigit())[:6]
+            try:
+                canonical = agg._store.get(hs6, s["origin"], s["destination"], today)
+                if canonical and canonical.mfn_rate is not None and canonical.preferential_rate is not None:
+                    mfn  = canonical.mfn_rate
+                    pref = canonical.preferential_rate
+            except Exception:
+                pass
+
+        # 2. Lane-level fallback
+        if mfn is None:
+            enriched = lane_rates.get((s["fta_name"], s["origin"], s["destination"]))
+            if enriched:
+                mfn  = enriched["mfn_rate_pct"]
+                pref = enriched["preferential_rate_pct"]
+
+        if mfn is not None and pref is not None:
+            s = dict(s)
             s["est_saving_k"] = round(max(0.0, s["value_k"] * (mfn - pref) / 100), 1)
+
         result.append(s)
     return result
 
@@ -1235,27 +1919,60 @@ def get_fta_kpis() -> dict:
 
 def get_roo_assessments():
     """
-    Returns a list of RoO assessment dicts (same schema as fta_simulator), or
-    {"unavailable": True, "missing_cols": [...]} when RoO columns are absent.
-    The caller must check for the "unavailable" key before iterating.
+    Returns a list of RoO assessment dicts, or a sentinel dict describing why
+    assessment is unavailable.
+
+    Precedence (RVC):
+      1. Computed from uploaded BoM (per product_id / shipment_id fallback)
+      2. Client-provided rvc_pct column in shipment upload
+      3. Unavailable
+
+    Precedence (threshold):
+      1. Uploaded RoO rules (matched by fta_name + longest hs_code_prefix)
+      2. Client-provided roo_threshold_pct column in shipment upload
+      3. 'no RoO rule uploaded'
+
+    State A  — no shipment upload   → {"unavailable": True, "reason": "no_upload"}
+    State B  — uploaded, no RVC source at all → {"unavailable": True, "missing_cols": [...]}
+    State C  — no BoM/RoO uploads: pure shipment-column path (UNCHANGED from before)
+    State C+ — BoM or RoO rules uploaded: enhanced path with provenance fields
+               (rvc_source, threshold_source, verdict added to each row dict)
     """
     with _lock:
-        mode    = _state["shipment_mode"]
-        df      = _state["shipment_df"]
-        has_roo = _state["shipment_has_roo"]
-        missing = [c for c in SHIPMENT_ROO
-                   if df is not None and c not in df.columns]
+        s_mode    = _state["shipment_mode"]
+        s_df      = _state["shipment_df"]
+        has_roo   = _state["shipment_has_roo"]
+        bom_mode  = _state["bom_mode"]
+        bom_df    = _state["bom_df"]
+        roo_mode  = _state["roo_mode"]
+        roo_df    = _state["roo_df"]
 
-    if mode != "uploaded":
+    has_bom       = (bom_mode == "uploaded" and bom_df is not None)
+    has_roo_rules = (roo_mode == "uploaded" and roo_df is not None)
+
+    # State A: no shipment data
+    if s_mode != "uploaded":
         return {"unavailable": True, "reason": "no_upload"}
 
-    if not has_roo:
+    # State B: no RVC source at all (no BoM, no shipment RoO cols)
+    if not has_bom and not has_roo:
+        missing = [c for c in SHIPMENT_ROO
+                   if s_df is not None and c not in s_df.columns]
         return {
-            "unavailable":   True,
-            "missing_cols":  missing if missing else list(SHIPMENT_ROO),
+            "unavailable":  True,
+            "missing_cols": missing if missing else list(SHIPMENT_ROO),
         }
 
-    return _derive_roo_assessments(df)
+    # State C: pure shipment-column path — UNCHANGED from before
+    if not has_bom and not has_roo_rules:
+        return _derive_roo_assessments(s_df)
+
+    # State C+: enhanced path (at least one of BoM / RoO rules uploaded)
+    return _derive_roo_assessments_enhanced(
+        s_df, has_roo,
+        bom_df if has_bom else None,
+        roo_df if has_roo_rules else None,
+    )
 
 
 def get_qualification_roadmap() -> list:

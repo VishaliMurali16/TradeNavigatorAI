@@ -94,6 +94,19 @@ aggregator:
       - hs_code: "0406.90"     # Cheese (high MFN, KORUS preferential)
         origin:  "KR"
         destination: "US"
+      # Dell accessory lanes — rates verified against live USITC HTS API
+      - hs_code: "4202.12"     # Laptop carry case  (MFN 5.7%, KORUS 0%)
+        origin:  "KR"
+        destination: "US"
+      - hs_code: "8544.42"     # Power cables       (MFN 2.6%, KORUS 0%)
+        origin:  "KR"
+        destination: "US"
+      - hs_code: "3926.90"     # Plastic accessories (MFN 2.4%, KORUS 0%)
+        origin:  "KR"
+        destination: "US"
+      - hs_code: "7326.90"     # Steel hardware      (MFN 2.9%, no FTA — CN->US)
+        origin:  "CN"
+        destination: "US"
 
 # --- Tariff Shock & Resilience Agent -------------------------------------------
 tariff_shock:
