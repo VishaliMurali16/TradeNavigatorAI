@@ -1326,6 +1326,32 @@ body {
 .rate-cell-btn:hover { text-decoration: underline dotted var(--accent); }
 .rate-cell-info { font-size: 0.61rem; color: rgba(161,0,255,0.5); }
 
+/* ── Category filter select (topbar) ───────────────────────── */
+.cat-filter-wrap {
+    display: flex; align-items: center; gap: 6px;
+    margin-right: 10px;
+}
+.cat-filter-label {
+    font-size: 0.68rem; font-weight: 700; color: rgba(255,255,255,0.55);
+    text-transform: uppercase; letter-spacing: 0.8px; white-space: nowrap;
+}
+.cat-filter-select {
+    appearance: none; -webkit-appearance: none;
+    background: rgba(161,0,255,0.18) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23A100FF'/%3E%3C/svg%3E") no-repeat right 8px center;
+    background-size: 8px 5px;
+    border: 1.5px solid rgba(161,0,255,0.45);
+    border-radius: 6px;
+    color: #fff;
+    font-size: 0.76rem; font-weight: 600;
+    padding: 5px 26px 5px 10px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    min-width: 140px;
+}
+.cat-filter-select:hover { background-color: rgba(161,0,255,0.30); border-color: #A100FF; }
+.cat-filter-select:focus { outline: none; border-color: #A100FF; }
+.cat-filter-select option { background: #1a0533; color: #fff; }
+
 /* ── Settings industry picker ───────────────────────────────── */
 .settings-section { margin-bottom: 18px; }
 .settings-section-title {
@@ -1410,6 +1436,7 @@ BASE = """<!DOCTYPE html>
 <body>
 <!-- ── Workspace top bar ──────────────────────────────────────── -->
 <div class="topbar">
+  {% if topbar_extras is defined %}{{ topbar_extras | safe }}{% endif %}
   <div class="topbar-avatar-wrap">
     <button class="topbar-avatar" id="workspaceBtn" aria-label="Workspace">
       <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -2497,6 +2524,7 @@ def api_fta_explain():
     ro_status         = data.get("ro_status", "")          # human-readable label
     rvc_pct           = data.get("rvc_pct", 0)             # RVC_PCT
     rvc_threshold_pct = data.get("rvc_threshold_pct", 0)   # RVC_THRESHOLD
+    compliance_note   = data.get("compliance_note", "")    # from RoO assessment
 
     system_prompt = (
         "You are TradeNavigator AI, an expert FTA compliance advisor. "
@@ -2523,11 +2551,15 @@ def api_fta_explain():
         )
 
     _action_verb = "qualifies for" if ro_status == "Qualified" else "does not qualify for" if ro_status == "Fail" else "is assessed under"
+    _note_clause = (
+        f" System compliance note for this product: {compliance_note}"
+        if compliance_note else ""
+    )
     user_prompt = (
         f"Assess whether shipment {shipment_id} ({product}, HS {hs_code}) from "
         f"{origin} to {destination} {_action_verb} {fta_name} preferential treatment. "
         f"Rules-of-origin: {roo_sentence} "
-        f"Estimated duty saving if qualified: ${est_saving_k}K. "
+        f"Estimated duty saving if qualified: ${est_saving_k}K.{_note_clause} "
         f"State the recommended immediate action. Tone: actionable, CFO-ready."
     )
 
@@ -2830,6 +2862,9 @@ def agent_fta_preferential():
     source       = fta_data_source.get_source_info()
     s_msg, c_msg, b_msg, r_msg = fta_data_source.take_upload_messages()
 
+    # ── Category filter param (URL query string: ?cat=laptops etc.) ─────────
+    cat = request.args.get("cat", "all").strip().lower()
+
     # ── Industry filtering ──────────────────────────────────────────────────
     # Apply BEFORE HTML rendering so KPIs, tables, and empty states all reflect
     # the same filtered view. "all" → no filter (current behavior unchanged).
@@ -2897,6 +2932,45 @@ def agent_fta_preferential():
             kpis["unclaimed_opportunity_m"] = None
             kpis["coo_outstanding"]         = None
 
+    # ── Category filtering ─────────────────────────────────────────────────
+    # Applied after industry filtering.  cat="all" or "" → no additional filter.
+    _cat_active = cat not in ("", "all")
+    if _cat_active and not _is_empty:
+        shipments = [
+            s for s in shipments
+            if s.get("product_category", "").lower() == cat
+        ]
+        if isinstance(roo_items, list):
+            roo_items = [
+                r for r in roo_items
+                if r.get("product_category", "").lower() == cat
+            ]
+        # Keep only lanes that have at least one matching shipment
+        _cat_lane_keys = {
+            (s["fta_name"], s["origin"], s["destination"]) for s in shipments
+        }
+        lanes = [
+            l for l in lanes
+            if (l["fta_name"], l["origin"], l["destination"]) in _cat_lane_keys
+        ]
+        _lane_ids_cat = {l["lane_id"] for l in lanes}
+        roadmap = [item for item in roadmap if item.get("lane_id") in _lane_ids_cat]
+        # Re-derive KPIs from category-filtered lanes
+        if not kpis.get("empty") and lanes:
+            _cf_elig  = sum(l["eligible_value_m"] for l in lanes)
+            _cf_claim = sum(l["claimed_value_m"]  for l in lanes)
+            _cf_uncl  = sum(
+                l["unclaimed_savings_k"] for l in lanes
+                if l["unclaimed_savings_k"] is not None
+            )
+            kpis = dict(kpis)
+            kpis["utilization_pct"]         = round(_cf_claim / _cf_elig * 100, 1) if _cf_elig else 0.0
+            kpis["unclaimed_opportunity_m"] = round(_cf_uncl / 1_000, 2)
+        elif not kpis.get("empty") and not lanes:
+            kpis = dict(kpis)
+            kpis["utilization_pct"]         = None
+            kpis["unclaimed_opportunity_m"] = None
+
     # Period label comes from the data source (dynamic for uploaded data)
     period_label = kpis.get("period_label", "")
 
@@ -2914,6 +2988,26 @@ def agent_fta_preferential():
     header_html = (
         '<h2 style="font-size:1rem;font-weight:700;color:#1a0533;margin-bottom:16px;">'
         'FTA &amp; Preferential Trade Agent</h2>'
+    )
+
+    # ── Category filter dropdown (injected into the topbar via topbar_extras) ─
+    _cat_opts_map = [
+        ("all",              "All Categories"),
+        ("laptops",          "Laptops"),
+        ("peripherals",      "Peripherals"),
+        ("server equipment", "Server Equipment"),
+    ]
+    _cat_opts_html = "".join(
+        f'<option value="{_cv}"{" selected" if cat == _cv else ""}>{_cl}</option>'
+        for _cv, _cl in _cat_opts_map
+    )
+    topbar_extras = (
+        '<div class="cat-filter-wrap">'
+        '<span class="cat-filter-label">Category</span>'
+        '<select class="cat-filter-select" '
+        "onchange=\"window.location.href='?cat='+encodeURIComponent(this.value)\">"
+        + _cat_opts_html +
+        '</select></div>'
     )
 
     # ── Upload / data-source section ─────────────────────────────────────
@@ -3342,25 +3436,33 @@ def agent_fta_preferential():
         '</table></div></div>'
     )
 
-    # ── Shipment eligibility feed (PREF_STATUS=U only) ───────────────────
+    # ── Merged Shipment + RoO table (replaces both original tables) ─────────
     roo_badge_styles = {
         "Q": "background:#e6fff9;color:#12B3A3",
         "M": "background:#fff3cd;color:#856404",
         "F": "background:#fde8e8;color:#c0392b",
     }
-    unclaimed     = [s for s in shipments if s["claimed_status"] == "U"]
-    shipment_rows = ""
+
+    # Build RoO lookup keyed by (product, hs_code, fta_name)
+    _roo_lut: dict = {}
+    if isinstance(roo_items, list):
+        for _r in roo_items:
+            _roo_lut[(_r["product"], _r["hs_code"], _r["fta_name"])] = _r
+
+    unclaimed    = [s for s in shipments if s["claimed_status"] == "U"]
+    merged_rows  = ""
     if not unclaimed:
         if _is_empty:
-            _shp_empty = '\U0001f4c2 No shipment data — upload a file above'
+            _m_empty = '\U0001f4c2 No shipment data — upload a file above'
         elif _no_industry_match:
-            _shp_empty = f'No {ind_label} unclaimed shipments in your uploaded data'
+            _m_empty = f'No {ind_label} unclaimed shipments in your uploaded data'
         else:
-            _shp_empty = '✓ No eligible-unclaimed shipments in the uploaded data'
-        shipment_rows = (
-            '<tr><td colspan="8" style="padding:32px;text-align:center;'
-            f'color:#999;font-size:0.85rem">{_shp_empty}</td></tr>'
+            _m_empty = '✓ No eligible-unclaimed shipments in the uploaded data'
+        merged_rows = (
+            '<tr><td colspan="14" style="padding:32px;text-align:center;'
+            f'color:#999;font-size:0.85rem">{_m_empty}</td></tr>'
         )
+
     for s in unclaimed:
         roo_code  = s["roo_status"]
         roo_label = ROO_STATUS_LABELS.get(roo_code) or "—"
@@ -3371,7 +3473,30 @@ def agent_fta_preferential():
         origin_n  = _ctry(s["origin"])
         dest_n    = _ctry(s["destination"])
         entry_d   = _dats_display(s["entry_date"])
-        shipment_rows += (
+        s_cat     = s.get("product_category") or "—"
+
+        # Merge in RoO assessment data for this product/lane
+        _rk  = (s["product"], s["hs_code"], s["fta_name"])
+        _rd  = _roo_lut.get(_rk)
+        if _rd:
+            _roo_test = _rd.get("roo_test_type", "—")
+            _rvc      = _rd.get("rvc_pct")
+            _thr      = _rd.get("roo_threshold_pct")
+            _rvc_cell = f'{_rvc}% / {_thr}%' if _rvc is not None and _thr is not None else "—"
+            _gap      = _rd.get("gap_pct", 0)
+            _gap_html = (
+                f'<span style="color:#c0392b;font-weight:600">−{_gap} pts</span>'
+                if _gap > 0 else
+                '<span style="color:#12B3A3;font-weight:600">—</span>'
+            )
+            _note         = _rd.get("compliance_note", "")
+            _note_escaped = _note.replace("&", "&amp;").replace('"', "&quot;")
+        else:
+            _roo_test = _rvc_cell = "—"
+            _gap_html = "—"
+            _note = _note_escaped = ""
+
+        merged_rows += (
             f'<tr style="{row_bg}cursor:pointer;border-bottom:1px solid #f5f3fa" '
             f"onclick=\"fetchFTAExplain(this, '{tor_id}')\" "
             f'data-shipment-id="{tor_id}" '
@@ -3385,55 +3510,63 @@ def agent_fta_preferential():
             f'data-est-saving-k="{saving_k}" '
             f'data-ro-status="{roo_label}" '
             f'data-rvc-pct="{s["rvc_pct"] if s["rvc_pct"] is not None else 0}" '
-            f'data-rvc-threshold="{s["roo_threshold_pct"] if s["roo_threshold_pct"] is not None else 0}">'
-            f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600">{tor_id}</td>'
-            f'<td style="padding:10px 12px;font-size:0.78rem;color:#666;'
-            f'font-family:monospace">{entry_d}</td>'
+            f'data-rvc-threshold="{s["roo_threshold_pct"] if s["roo_threshold_pct"] is not None else 0}" '
+            f'data-compliance-note="{_note_escaped}">'
+            # Shipment columns
+            f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;white-space:nowrap">{tor_id}</td>'
+            f'<td style="padding:10px 12px;font-size:0.78rem;color:#666;font-family:monospace;white-space:nowrap">{entry_d}</td>'
+            f'<td style="padding:10px 12px;font-size:0.78rem;color:#555">{s_cat}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem">{s["product"]}</td>'
-            f'<td style="padding:10px 12px;font-size:0.82rem;font-family:monospace">'
-            f'{s["hs_code"]}</td>'
-            f'<td style="padding:10px 12px;font-size:0.82rem">'
-            f'{origin_n} → {dest_n}</td>'
-            f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;'
-            f'color:#A100FF">${saving_k}K</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem;font-family:monospace">{s["hs_code"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem;white-space:nowrap">{origin_n} → {dest_n}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:#A100FF">{s["fta_name"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:#A100FF;white-space:nowrap">${saving_k}K</td>'
+            # RoO assessment columns
+            f'<td style="padding:10px 12px;font-size:0.78rem;color:#555">{_roo_test}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem;text-align:center;white-space:nowrap">{_rvc_cell}</td>'
             f'<td style="padding:10px 12px">'
-            f'<span style="padding:2px 8px;border-radius:4px;font-size:0.72rem;'
-            f'font-weight:600;{ro_badge}">{roo_label}</span>'
-            f'<div style="font-size:0.65rem;color:#999;margin-top:3px">'
+            f'<span style="padding:2px 8px;border-radius:4px;font-size:0.72rem;font-weight:600;{ro_badge}">{roo_label}</span>'
             + (
-                f'RVC {s["rvc_pct"]}% / {s["roo_threshold_pct"]}% req\'d'
-                if s["rvc_pct"] is not None and s["roo_threshold_pct"] is not None
-                else "RVC data incomplete"
+                f'<div style="font-size:0.65rem;color:#999;margin-top:3px">'
+                + (f'RVC {s["rvc_pct"]}% / {s["roo_threshold_pct"]}% req\'d'
+                   if s["rvc_pct"] is not None and s["roo_threshold_pct"] is not None
+                   else "RVC data incomplete")
+                + '</div>'
             ) +
-            '</div></td>'
-            f'<td style="padding:10px 12px;font-size:0.78rem;color:#A100FF;'
-            f'font-weight:600">▶ Explain</td>'
+            f'</td>'
+            f'<td style="padding:10px 12px;text-align:center">{_gap_html}</td>'
+            f'<td style="padding:10px 12px;font-size:0.75rem;color:#666;max-width:180px">{_note}</td>'
+            f'<td style="padding:10px 12px;font-size:0.78rem;color:#A100FF;font-weight:600;white-space:nowrap">▶ Explain</td>'
             '</tr>'
         )
 
-    shipment_section = (
+    merged_section = (
         '<div class="section-card">'
         '<div class="section-card-header">'
-        f'\U0001f4e6 Shipment Eligibility Feed — Eligible / Unclaimed (PREF_STATUS=U)'
-        f'<span style="font-size:0.72rem;font-weight:400;color:#888;'
-        f'margin-left:10px;letter-spacing:0">({period_label})</span>'
+        '\U0001f4cb Shipment Eligibility &amp; RoO Assessment — Unclaimed (PREF_STATUS=U)'
+        f'<span style="font-size:0.72rem;font-weight:400;color:#888;margin-left:10px;letter-spacing:0">({period_label})</span>'
         f'{_sap_badge("SAP TM + GTS")}</div>'
-        '<div style="overflow-x:auto">'
+        '<div style="overflow-x:auto;max-height:420px;overflow-y:auto">'
         '<table style="width:100%;border-collapse:collapse">'
-        '<thead><tr>'
+        '<thead><tr style="position:sticky;top:0;z-index:2;background:#fff">'
         + _pth("Freight Order", ["TOR_ID"])
         + _pth("Entry Date", ["ENTRY_DATE"])
+        + _pth("Category", ["PRODUCT_CATEGORY"])
         + _pth("Product", ["PRODUCT_TEXT"])
         + _pth("HS Code", ["CCNGN"])
         + _pth("Lane", ["CTYDP", "CTYAR"])
+        + _pth("Agreement", ["AGREEMENT"])
         + _pth("Est. Saving", ["CUSVAL", "MFN_RATE", "PREF_RATE"])
+        + _pth("RoO Test", [])
+        + _pth("RVC Actual / Required", ["RVC_PCT", "RVC_THRESHOLD"])
         + _pth("RoO Status", ["ROO_STATUS"])
+        + _pth("Gap", ["RVC_PCT", "RVC_THRESHOLD"])
+        + _pth("Compliance Note", [])
         + _pth("Action", []) +
         '</tr></thead>'
-        f'<tbody>{shipment_rows}</tbody>'
+        f'<tbody>{merged_rows}</tbody>'
         '</table></div>'
-        '<div id="fta-ai-box" class="ai-summary" '
-        'style="display:none;margin:16px 20px"></div>'
+        '<div id="fta-ai-box" class="ai-summary" style="display:none;margin:16px 20px"></div>'
         '</div>'
     )
 
@@ -3626,19 +3759,7 @@ def agent_fta_preferential():
             '</div>'
         )
 
-    roo_section = (
-        '<details open style="margin-bottom:12px;border-radius:10px;'
-        'box-shadow:0 2px 8px rgba(26,5,51,0.07);background:#fff">'
-        '<summary style="padding:14px 20px;font-size:0.8rem;font-weight:700;'
-        'text-transform:uppercase;letter-spacing:1px;border-bottom:1px solid #f0eaf8;'
-        'display:flex;align-items:center;gap:8px;cursor:pointer;list-style:none;'
-        'user-select:none;color:#1a0533">'
-        '\U0001f4cb RoO / Preference Assessment'
-        f'{_sap_badge("SAP GTS")}'
-        '</summary>'
-        + roo_body + _roo_footer
-        + '</details>'
-    )
+    # roo_section removed — its data is now merged into merged_section above.
 
     # ── Qualification Roadmap (collapsible) ──────────────────────────────
     roadmap_rows = ""
@@ -3778,8 +3899,7 @@ def agent_fta_preferential():
         + lane_section
         + coo_section
         + '</div>'
-        + '<div style="margin-bottom:20px">' + shipment_section + '</div>'
-        + roo_section
+        + '<div style="margin-bottom:20px">' + merged_section + '</div>'
         + roadmap_section
         + prov_modal_html
         + mapping_modal_html
@@ -3803,7 +3923,8 @@ function fetchFTAExplain(row, shipmentId) {
         est_saving_k: parseFloat(row.dataset.estSavingK),
         ro_status:        row.dataset.roStatus,
         rvc_pct:          parseFloat(row.dataset.rvcPct),
-        rvc_threshold_pct: parseFloat(row.dataset.rvcThreshold)
+        rvc_threshold_pct: parseFloat(row.dataset.rvcThreshold),
+        compliance_note:  row.dataset.complianceNote || ''
     };
     box.style.display = 'flex';
     box.innerHTML = '<div class="ai-icon">\U0001f916</div><div>'
@@ -4268,6 +4389,7 @@ function escAttr(s) { return escH(s); }
         scripts=scripts,
         industry=industry,
         all_industries=get_industries(),
+        topbar_extras=topbar_extras,
         **_extra_kw,
     )
 
