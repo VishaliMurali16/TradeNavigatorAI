@@ -94,6 +94,7 @@ _ERP_SHIPMENT_MAP: dict[str, str] = {
     "bom_content":       "bom_regional_content",
     "ccy":               "currency",
     "PRODUCT_CATEGORY":  "product_category",   # uppercase ERP / CSV export alias
+    "SHIPMENT_STATUS":   "shipment_status",
 }
 
 _ERP_COO_MAP: dict[str, str] = {
@@ -938,6 +939,7 @@ def _derive_shipments(
             "est_saving_k":         None,  # populated by get_fta_shipments() after enrichment
             "duty_saving":          duty_saving,
             "product_category":     str(row.get("product_category", "")).strip(),
+            "shipment_status":      str(row.get("shipment_status",  "")).strip(),
         })
 
     return result
@@ -1043,11 +1045,6 @@ def _derive_roo_assessments(df: pd.DataFrame) -> list[dict]:
                 f"RVC gap of {gap_pct}% below the {threshold}% threshold — "
                 "significant sourcing changes required."
             )
-
-        if "supplier_name" in df.columns:
-            suppliers = list(grp["supplier_name"].dropna().unique())[:3]
-            if suppliers:
-                note += f" Suppliers: {', '.join(str(s) for s in suppliers)}."
 
         _grp_cat = (
             str(grp["product_category"].dropna().iloc[0]).strip()
@@ -1393,11 +1390,6 @@ def _derive_roo_assessments_enhanced(
                 f"RVC {_rvc_lbl} is {gap_pct}% below {_thr_lbl} threshold — "
                 "significant sourcing changes required."
             )
-
-        if roo_status and "supplier_name" in df.columns:
-            suppliers = list(grp["supplier_name"].dropna().unique())[:3]
-            if suppliers:
-                compliance_note += f" Suppliers: {', '.join(str(s) for s in suppliers)}."
 
         result.append({
             "product":           str(product),
@@ -1787,6 +1779,38 @@ def get_fta_lanes() -> list:
     lanes = _derive_lanes(df)
     enriched = _enrich_lanes_from_aggregator(lanes)
     # Sort after enrichment so ordering reflects real savings (None lanes sort last)
+    enriched.sort(key=lambda x: (x["unclaimed_savings_k"] or 0), reverse=True)
+    return enriched
+
+
+def get_fta_lanes_by_status(status_bucket: str = "all") -> list:
+    """
+    Like get_fta_lanes() but pre-filters shipments by SHIPMENT_STATUS.
+    status_bucket:
+      "all"        — no filter (identical to get_fta_lanes)
+      "shipped"    — SHIPMENT_STATUS in {Delivered, Shipped}
+      "in_transit" — SHIPMENT_STATUS == In-Transit (any spelling variant)
+    Returns [] if shipment_status column is absent and bucket != "all".
+    """
+    with _lock:
+        mode = _state["shipment_mode"]
+        df   = _state["shipment_df"]
+    if mode != "uploaded":
+        return []
+    if status_bucket == "shipped":
+        if "shipment_status" not in df.columns:
+            return []
+        df = df[df["shipment_status"].str.strip().str.upper().isin(["DELIVERED", "SHIPPED"])]
+    elif status_bucket == "in_transit":
+        if "shipment_status" not in df.columns:
+            return []
+        df = df[df["shipment_status"].str.strip().str.upper().isin(
+            ["IN-TRANSIT", "IN_TRANSIT", "INTRANSIT", "IN TRANSIT"]
+        )]
+    if df.empty:
+        return []
+    lanes = _derive_lanes(df)
+    enriched = _enrich_lanes_from_aggregator(lanes)
     enriched.sort(key=lambda x: (x["unclaimed_savings_k"] or 0), reverse=True)
     return enriched
 

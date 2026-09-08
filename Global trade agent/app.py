@@ -1846,6 +1846,10 @@ def set_industry():
 
 @app.route("/")
 def control_tower():
+    return redirect(url_for("agent_fta_preferential"))
+
+@app.route("/control-tower")
+def control_tower_page():
     industry  = _current_industry()
     is_all    = industry.get("name") == "all"
     ind_label = industry.get("display_name", industry.get("name", "all"))
@@ -2740,12 +2744,27 @@ def fta_status():
         lanes = _ds.get_fta_lanes()
         ships = _ds.get_fta_shipments()
         kpis  = _ds.get_fta_kpis()
+        # Inspect raw shipment_df for status-column diagnostics
+        with _ds._lock:
+            _df = _ds._state.get("shipment_df")
+        _has_status = _df is not None and "shipment_status" in _df.columns
+        _status_vals = (
+            sorted(_df["shipment_status"].dropna().unique().tolist())
+            if _has_status else []
+        )
+        _lanes_shipped   = _ds.get_fta_lanes_by_status("shipped")
+        _lanes_intransit = _ds.get_fta_lanes_by_status("in_transit")
         return jsonify({
-            "source":           src,
-            "lane_count":       len(lanes),
-            "shipment_count":   len(ships),
-            "period_label":     kpis.get("period_label", ""),
-            "utilization_pct":  kpis.get("utilization_pct", 0),
+            "source":                src,
+            "lane_count":            len(lanes),
+            "shipment_count":        len(ships),
+            "period_label":          kpis.get("period_label", ""),
+            "utilization_pct":       kpis.get("utilization_pct", 0),
+            "shipment_df_columns":   list(_df.columns) if _df is not None else [],
+            "shipment_status_present": _has_status,
+            "shipment_status_values":  _status_vals,
+            "lanes_shipped_count":   len(_lanes_shipped),
+            "lanes_intransit_count": len(_lanes_intransit),
         })
     except Exception as exc:
         return jsonify({"source": src, "error": str(exc)})
@@ -2853,8 +2872,10 @@ def fta_template(which):
 @app.route("/agent/fta_preferential")
 def agent_fta_preferential():
     industry = _current_industry()
-    kpis         = fta_data_source.get_fta_kpis()
-    lanes        = fta_data_source.get_fta_lanes()
+    kpis            = fta_data_source.get_fta_kpis()
+    lanes           = fta_data_source.get_fta_lanes()
+    lanes_shipped   = fta_data_source.get_fta_lanes_by_status("shipped")
+    lanes_intransit = fta_data_source.get_fta_lanes_by_status("in_transit")
     shipments    = fta_data_source.get_fta_shipments()
     coo_requests = fta_data_source.get_coo_requests()
     roo_items    = fta_data_source.get_roo_assessments()
@@ -2910,6 +2931,12 @@ def agent_fta_preferential():
         roadmap = [item for item in roadmap if item.get("lane_id") in _lane_ids]
 
         _no_industry_match = not lanes and not shipments
+        # Apply same HS-based industry filter to status-split lane sets
+        _ind_lane_filter = lambda l: classify_shipment(
+            {"hs_code": l.get("representative_lane", {}).get("hs_code", "")}, industry
+        )
+        lanes_shipped   = [l for l in lanes_shipped   if _ind_lane_filter(l)]
+        lanes_intransit = [l for l in lanes_intransit if _ind_lane_filter(l)]
 
         # Re-derive KPIs from filtered data — never all-industry totals under an industry label
         if not kpis.get("empty") and not _no_industry_match:
@@ -2955,6 +2982,10 @@ def agent_fta_preferential():
         ]
         _lane_ids_cat = {l["lane_id"] for l in lanes}
         roadmap = [item for item in roadmap if item.get("lane_id") in _lane_ids_cat]
+        # Propagate category filter to status-split lane sets (by lane key)
+        _cat_keys_fin = {(l["fta_name"], l["origin"], l["destination"]) for l in lanes}
+        lanes_shipped   = [l for l in lanes_shipped   if (l["fta_name"], l["origin"], l["destination"]) in _cat_keys_fin]
+        lanes_intransit = [l for l in lanes_intransit if (l["fta_name"], l["origin"], l["destination"]) in _cat_keys_fin]
         # Re-derive KPIs from category-filtered lanes
         if not kpis.get("empty") and lanes:
             _cf_elig  = sum(l["eligible_value_m"] for l in lanes)
@@ -3359,70 +3390,69 @@ def agent_fta_preferential():
         )
 
     # ── Lane utilization table ───────────────────────────────────────────
-    lane_rows = ""
-    if not lanes:
-        _lane_empty = (
-            f'No {ind_label} shipments in your uploaded data'
-            if _no_industry_match else
-            '\U0001f4c2 No shipment data — upload a file above to populate this table'
-        )
-        lane_rows = (
-            '<tr><td colspan="7" style="padding:32px;text-align:center;'
-            f'color:#999;font-size:0.85rem">{_lane_empty}</td></tr>'
-        )
-    for lane in lanes:
-        util      = lane["utilization_pct"]
-        uncl_k    = lane["unclaimed_savings_k"]
-        sc        = "#c0392b" if (uncl_k or 0) > 200 else "#1a0533"
-        orig_name = _ctry(lane["origin"])
-        dest_name = _ctry(lane["destination"])
-        mfn_str   = f'{lane["mfn_rate_pct"]}%'          if lane["mfn_rate_pct"]          is not None else "—"
-        pref_str  = f'{lane["preferential_rate_pct"]}%' if lane["preferential_rate_pct"] is not None else "—"
-        uncl_html = f'${uncl_k}K' if uncl_k is not None else '<span style="color:#bbb">—</span>'
-        _rs_mfn   = str(lane["mfn_rate_pct"])          if lane["mfn_rate_pct"]          is not None else ""
-        _rs_pref  = str(lane["preferential_rate_pct"]) if lane["preferential_rate_pct"] is not None else ""
-        _rs_lane  = f'{orig_name} → {dest_name}'
-        lane_rows += (
-            '<tr style="border-bottom:1px solid #f5f3fa">'
-            f'<td style="padding:10px 12px;font-size:0.82rem">'
-            f'{orig_name} → {dest_name}</td>'
-            f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600">'
-            f'{lane["fta_name"]}</td>'
-            f'<td style="padding:10px 12px;font-size:0.82rem">'
-            f'${lane["eligible_value_m"]}M</td>'
-            f'<td style="padding:10px 12px;font-size:0.82rem">'
-            f'${lane["claimed_value_m"]}M</td>'
-            f'<td style="padding:10px 12px;font-size:0.78rem;color:#555">'
-            f'<button class="rate-cell-btn" '
-            f'data-src="{lane["rates_source"]}" data-mfn="{_rs_mfn}" '
-            f'data-pref="{_rs_pref}" data-fta="{lane["fta_name"]}" '
-            f'data-lane="{_rs_lane}" onclick="openRsDialog(this)" '
-            f'title="Click to see rate source &amp; data honesty">'
-            f'<span style="color:#c0392b;font-weight:600">{mfn_str}</span>'
-            f' MFN → '
-            f'<span style="color:#12B3A3;font-weight:600">{pref_str}</span>'
-            f' pref'
-            f'<span class="rate-cell-info">&#x24D8;</span>'
-            f'</button></td>'
-            f'<td style="padding:10px 12px;font-size:0.82rem">'
-            f'<div style="background:#e8e0f0;border-radius:3px;height:6px;'
-            f'width:80px;display:inline-block">'
-            f'<div style="background:#A100FF;height:6px;border-radius:3px;'
-            f'width:{util}%"></div></div>'
-            f'<span style="margin-left:6px;font-size:0.75rem">{util}%</span></td>'
-            f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:{sc}">'
-            f'{uncl_html}</td>'
-            '</tr>'
-        )
+    def _mk_lane_tbody(lane_list, empty_msg):
+        if not lane_list:
+            return (
+                '<tr><td colspan="7" style="padding:32px;text-align:center;'
+                f'color:#999;font-size:0.85rem">{empty_msg}</td></tr>'
+            )
+        rows = ""
+        for lane in lane_list:
+            util      = lane["utilization_pct"]
+            uncl_k    = lane["unclaimed_savings_k"]
+            sc        = "#c0392b" if (uncl_k or 0) > 200 else "#1a0533"
+            orig_name = _ctry(lane["origin"])
+            dest_name = _ctry(lane["destination"])
+            mfn_str   = f'{lane["mfn_rate_pct"]}%'          if lane["mfn_rate_pct"]          is not None else "—"
+            pref_str  = f'{lane["preferential_rate_pct"]}%' if lane["preferential_rate_pct"] is not None else "—"
+            uncl_html = f'${uncl_k}K' if uncl_k is not None else '<span style="color:#bbb">—</span>'
+            _rs_mfn   = str(lane["mfn_rate_pct"])          if lane["mfn_rate_pct"]          is not None else ""
+            _rs_pref  = str(lane["preferential_rate_pct"]) if lane["preferential_rate_pct"] is not None else ""
+            _rs_lane  = f'{orig_name} → {dest_name}'
+            rows += (
+                '<tr style="border-bottom:1px solid #f5f3fa">'
+                f'<td style="padding:10px 12px;font-size:0.82rem">'
+                f'{orig_name} → {dest_name}</td>'
+                f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600">'
+                f'{lane["fta_name"]}</td>'
+                f'<td style="padding:10px 12px;font-size:0.82rem">'
+                f'${lane["eligible_value_m"]}M</td>'
+                f'<td style="padding:10px 12px;font-size:0.82rem">'
+                f'${lane["claimed_value_m"]}M</td>'
+                f'<td style="padding:10px 12px;font-size:0.78rem;color:#555">'
+                f'<button class="rate-cell-btn" '
+                f'data-src="{lane["rates_source"]}" data-mfn="{_rs_mfn}" '
+                f'data-pref="{_rs_pref}" data-fta="{lane["fta_name"]}" '
+                f'data-lane="{_rs_lane}" onclick="openRsDialog(this)" '
+                f'title="Click to see rate source &amp; data honesty">'
+                f'<span style="color:#c0392b;font-weight:600">{mfn_str}</span>'
+                f' MFN → '
+                f'<span style="color:#12B3A3;font-weight:600">{pref_str}</span>'
+                f' pref'
+                f'<span class="rate-cell-info">&#x24D8;</span>'
+                f'</button></td>'
+                f'<td style="padding:10px 12px;font-size:0.82rem">'
+                f'<div style="background:#e8e0f0;border-radius:3px;height:6px;'
+                f'width:80px;display:inline-block">'
+                f'<div style="background:#A100FF;height:6px;border-radius:3px;'
+                f'width:{util}%"></div></div>'
+                f'<span style="margin-left:6px;font-size:0.75rem">{util}%</span></td>'
+                f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:{sc}">'
+                f'{uncl_html}</td>'
+                '</tr>'
+            )
+        return rows
 
-    lane_section = (
-        '<div class="section-card">'
-        f'<div class="section-card-header">\U0001f310 FTA Lane Utilization Gap'
-        f'<span style="font-size:0.72rem;font-weight:400;color:#888;'
-        f'margin-left:10px;letter-spacing:0">({period_label})</span>'
-        f'{_sap_badge("SAP TM + GTS")}</div>'
-        '<div style="overflow-x:auto;max-height:300px;overflow-y:auto">'
-        '<table style="width:100%;border-collapse:collapse">'
+    _lane_empty_all = (
+        f'No {ind_label} shipments in your uploaded data'
+        if _no_industry_match else
+        '\U0001f4c2 No shipment data — upload a file above to populate this table'
+    )
+    _tbody_all      = _mk_lane_tbody(lanes,         _lane_empty_all)
+    _tbody_shipped  = _mk_lane_tbody(lanes_shipped,  "No Shipped / Delivered shipments in this view")
+    _tbody_intransit= _mk_lane_tbody(lanes_intransit,"No In-Transit shipments in this view")
+
+    _lane_thead = (
         '<thead><tr>'
         + _pth("Trade Lane", ["CTYDP", "CTYAR"])
         + _pth("FTA Agreement", ["AGREEMENT"])
@@ -3430,10 +3460,39 @@ def agent_fta_preferential():
         + _pth("Claimed", ["CUSVAL", "PREF_STATUS"])
         + _pth("Rate Differential", ["MFN_RATE", "PREF_RATE"])
         + _pth("Utilization", ["PREF_STATUS", "CUSVAL"])
-        + _pth("Unclaimed Savings", ["CUSVAL", "MFN_RATE", "PREF_RATE"]) +
-        '</tr></thead>'
-        f'<tbody>{lane_rows}</tbody>'
-        '</table></div></div>'
+        + _pth("Unclaimed Savings", ["CUSVAL", "MFN_RATE", "PREF_RATE"])
+        + '</tr></thead>'
+    )
+
+    lane_section = (
+        '<div class="section-card">'
+        f'<div class="section-card-header">\U0001f310 FTA Lane Utilization Gap'
+        f'<span style="font-size:0.72rem;font-weight:400;color:#888;'
+        f'margin-left:10px;letter-spacing:0">({period_label})</span>'
+        f'{_sap_badge("SAP TM + GTS")}</div>'
+        # ── Status toggle bar ─────────────────────────────────────────────
+        '<div style="padding:10px 20px;display:flex;align-items:center;gap:8px;'
+        'border-bottom:1px solid #f0eaf8;flex-wrap:wrap">'
+        '<span style="font-size:0.72rem;font-weight:600;color:#888;'
+        'text-transform:uppercase;letter-spacing:0.5px;margin-right:4px">Filter:</span>'
+        '<button id="ltog-all" onclick="switchLaneFilter(\'all\')" '
+        'style="padding:3px 12px;border-radius:12px;border:1px solid #A100FF;'
+        'background:#A100FF;color:#fff;font-size:0.75rem;font-weight:600;cursor:pointer">All</button>'
+        '<button id="ltog-shipped" onclick="switchLaneFilter(\'shipped\')" '
+        'style="padding:3px 12px;border-radius:12px;border:1px solid #ddd;'
+        'background:#fff;color:#555;font-size:0.75rem;font-weight:600;cursor:pointer">Shipped</button>'
+        '<button id="ltog-intransit" onclick="switchLaneFilter(\'intransit\')" '
+        'style="padding:3px 12px;border-radius:12px;border:1px solid #ddd;'
+        'background:#fff;color:#555;font-size:0.75rem;font-weight:600;cursor:pointer">In-Transit</button>'
+        '<span id="lane-status-note" style="font-size:0.72rem;color:#888;margin-left:8px"></span>'
+        '</div>'
+        '<div style="overflow-x:auto;max-height:300px;overflow-y:auto">'
+        '<table style="width:100%;border-collapse:collapse">'
+        + _lane_thead
+        + f'<tbody id="lane-tbody-all">{_tbody_all}</tbody>'
+        + f'<tbody id="lane-tbody-shipped" style="display:none">{_tbody_shipped}</tbody>'
+        + f'<tbody id="lane-tbody-intransit" style="display:none">{_tbody_intransit}</tbody>'
+        + '</table></div></div>'
     )
 
     # ── Merged Shipment + RoO table (replaces both original tables) ─────────
@@ -3459,7 +3518,7 @@ def agent_fta_preferential():
         else:
             _m_empty = '✓ No eligible-unclaimed shipments in the uploaded data'
         merged_rows = (
-            '<tr><td colspan="14" style="padding:32px;text-align:center;'
+            '<tr><td colspan="15" style="padding:32px;text-align:center;'
             f'color:#999;font-size:0.85rem">{_m_empty}</td></tr>'
         )
 
@@ -3517,6 +3576,7 @@ def agent_fta_preferential():
             f'<td style="padding:10px 12px;font-size:0.78rem;color:#666;font-family:monospace;white-space:nowrap">{entry_d}</td>'
             f'<td style="padding:10px 12px;font-size:0.78rem;color:#555">{s_cat}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem">{s["product"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.78rem;color:#555">{s.get("supplier_name") or "—"}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem;font-family:monospace">{s["hs_code"]}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem;white-space:nowrap">{origin_n} → {dest_n}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:#A100FF">{s["fta_name"]}</td>'
@@ -3553,6 +3613,7 @@ def agent_fta_preferential():
         + _pth("Entry Date", ["ENTRY_DATE"])
         + _pth("Category", ["PRODUCT_CATEGORY"])
         + _pth("Product", ["PRODUCT_TEXT"])
+        + _pth("Supplier", ["SUPPLIER_NAME"])
         + _pth("HS Code", ["CCNGN"])
         + _pth("Lane", ["CTYDP", "CTYAR"])
         + _pth("Agreement", ["AGREEMENT"])
@@ -3908,6 +3969,34 @@ def agent_fta_preferential():
     # ── Scripts ──────────────────────────────────────────────────────────
     scripts = """
 <script>
+// ── Lane status toggle ────────────────────────────────────────────────────
+function switchLaneFilter(bucket) {
+  var buckets = ['all', 'shipped', 'intransit'];
+  var notes = {
+    shipped:   'Already cleared — unclaimed savings on these were not captured.',
+    intransit: 'Still capturable — these orders haven\'t cleared customs yet.',
+    all:       ''
+  };
+  buckets.forEach(function(b) {
+    var tbody = document.getElementById('lane-tbody-' + b);
+    var btn   = document.getElementById('ltog-' + b);
+    if (tbody) tbody.style.display = (b === bucket) ? '' : 'none';
+    if (btn) {
+      if (b === bucket) {
+        btn.style.background = '#A100FF';
+        btn.style.color = '#fff';
+        btn.style.borderColor = '#A100FF';
+      } else {
+        btn.style.background = '#fff';
+        btn.style.color = '#555';
+        btn.style.borderColor = '#ddd';
+      }
+    }
+  });
+  var note = document.getElementById('lane-status-note');
+  if (note) note.textContent = notes[bucket] || '';
+}
+
 function fetchFTAExplain(row, shipmentId) {
     var box = document.getElementById('fta-ai-box');
     if (!box) return;
