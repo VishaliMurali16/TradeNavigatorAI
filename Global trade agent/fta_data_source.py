@@ -106,6 +106,7 @@ _ERP_COO_MAP: dict[str, str] = {
     "VDECL_DEADLINE":  "deadline",
     "POO_STATUS":      "status",
     "POO_TYPE":        "poo_type",
+    "DOC_TYPE":        "doc_type",
 }
 
 _ERP_BOM_MAP: dict[str, str] = {
@@ -1893,6 +1894,7 @@ def get_coo_requests() -> list:
             "origin":        str(row.get("origin",        "—")),
             "destination":   str(row.get("destination",   "—")),
             "poo_type":      str(row.get("poo_type",      "—")),
+            "doc_type":      str(row.get("doc_type",      "—")).strip(),
             "request_date":  _normalise_dats(row.get("request_date", "")),
             "deadline":      _normalise_dats(row.get("deadline",      "")),
             "status":        poo_s,
