@@ -93,6 +93,8 @@ _ERP_SHIPMENT_MAP: dict[str, str] = {
     "vendor":            "supplier_name",
     "bom_content":       "bom_regional_content",
     "ccy":               "currency",
+    "PRODUCT_CATEGORY":  "product_category",   # uppercase ERP / CSV export alias
+    "SHIPMENT_STATUS":   "shipment_status",
 }
 
 _ERP_COO_MAP: dict[str, str] = {
@@ -104,6 +106,7 @@ _ERP_COO_MAP: dict[str, str] = {
     "VDECL_DEADLINE":  "deadline",
     "POO_STATUS":      "status",
     "POO_TYPE":        "poo_type",
+    "DOC_TYPE":        "doc_type",
 }
 
 _ERP_BOM_MAP: dict[str, str] = {
@@ -130,6 +133,7 @@ _ERP_BOM_MAP: dict[str, str] = {
     "value":             "component_value",
     "origin":            "component_origin",
     "country_of_origin": "component_origin",
+    "PRODUCT_CATEGORY":  "product_category",   # uppercase ERP / CSV export alias
 }
 
 _ERP_ROO_MAP: dict[str, str] = {
@@ -675,8 +679,12 @@ def _normalise_cols(df: pd.DataFrame) -> pd.DataFrame:
 
 def _rename_erp_cols(df: pd.DataFrame, erp_map: dict[str, str]) -> pd.DataFrame:
     """Rename ERP/SAP column names to internal snake_case at the ingestion boundary.
+    Matching is case-insensitive so PRODUCT_CATEGORY, Product_Category, and
+    product_category all resolve to the same target.
     Columns not in the map (already snake_case) pass through unchanged."""
-    return df.rename(columns={k: v for k, v in erp_map.items() if k in df.columns})
+    upper_map = {k.upper(): v for k, v in erp_map.items()}
+    rename = {col: upper_map[col.upper()] for col in df.columns if col.upper() in upper_map}
+    return df.rename(columns=rename)
 
 
 def _validate_shipment(
@@ -931,6 +939,8 @@ def _derive_shipments(
             "entry_date":           entry_date,
             "est_saving_k":         None,  # populated by get_fta_shipments() after enrichment
             "duty_saving":          duty_saving,
+            "product_category":     str(row.get("product_category", "")).strip(),
+            "shipment_status":      str(row.get("shipment_status",  "")).strip(),
         })
 
     return result
@@ -1037,15 +1047,16 @@ def _derive_roo_assessments(df: pd.DataFrame) -> list[dict]:
                 "significant sourcing changes required."
             )
 
-        if "supplier_name" in df.columns:
-            suppliers = list(grp["supplier_name"].dropna().unique())[:3]
-            if suppliers:
-                note += f" Suppliers: {', '.join(str(s) for s in suppliers)}."
-
+        _grp_cat = (
+            str(grp["product_category"].dropna().iloc[0]).strip()
+            if "product_category" in grp.columns and not grp["product_category"].dropna().empty
+            else ""
+        )
         result.append({
             "product":           str(product),
             "hs_code":           str(hs),
             "fta_name":          str(fta),
+            "product_category":  _grp_cat,
             "roo_test_type":     "Regional Value Content",
             "rvc_pct":           avg_rvc,
             "roo_threshold_pct": threshold,
@@ -1380,11 +1391,6 @@ def _derive_roo_assessments_enhanced(
                 f"RVC {_rvc_lbl} is {gap_pct}% below {_thr_lbl} threshold — "
                 "significant sourcing changes required."
             )
-
-        if roo_status and "supplier_name" in df.columns:
-            suppliers = list(grp["supplier_name"].dropna().unique())[:3]
-            if suppliers:
-                compliance_note += f" Suppliers: {', '.join(str(s) for s in suppliers)}."
 
         result.append({
             "product":           str(product),
@@ -1778,6 +1784,38 @@ def get_fta_lanes() -> list:
     return enriched
 
 
+def get_fta_lanes_by_status(status_bucket: str = "all") -> list:
+    """
+    Like get_fta_lanes() but pre-filters shipments by SHIPMENT_STATUS.
+    status_bucket:
+      "all"        — no filter (identical to get_fta_lanes)
+      "shipped"    — SHIPMENT_STATUS in {Delivered, Shipped}
+      "in_transit" — SHIPMENT_STATUS == In-Transit (any spelling variant)
+    Returns [] if shipment_status column is absent and bucket != "all".
+    """
+    with _lock:
+        mode = _state["shipment_mode"]
+        df   = _state["shipment_df"]
+    if mode != "uploaded":
+        return []
+    if status_bucket == "shipped":
+        if "shipment_status" not in df.columns:
+            return []
+        df = df[df["shipment_status"].str.strip().str.upper().isin(["DELIVERED", "SHIPPED"])]
+    elif status_bucket == "in_transit":
+        if "shipment_status" not in df.columns:
+            return []
+        df = df[df["shipment_status"].str.strip().str.upper().isin(
+            ["IN-TRANSIT", "IN_TRANSIT", "INTRANSIT", "IN TRANSIT"]
+        )]
+    if df.empty:
+        return []
+    lanes = _derive_lanes(df)
+    enriched = _enrich_lanes_from_aggregator(lanes)
+    enriched.sort(key=lambda x: (x["unclaimed_savings_k"] or 0), reverse=True)
+    return enriched
+
+
 def get_fta_shipments() -> list:
     with _lock:
         mode    = _state["shipment_mode"]
@@ -1856,6 +1894,7 @@ def get_coo_requests() -> list:
             "origin":        str(row.get("origin",        "—")),
             "destination":   str(row.get("destination",   "—")),
             "poo_type":      str(row.get("poo_type",      "—")),
+            "doc_type":      str(row.get("doc_type",      "—")).strip(),
             "request_date":  _normalise_dats(row.get("request_date", "")),
             "deadline":      _normalise_dats(row.get("deadline",      "")),
             "status":        poo_s,

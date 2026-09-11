@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import concurrent.futures
 import logging
 import json
@@ -34,7 +34,7 @@ _AI_CACHE_TTL = 60  # seconds
 
 _log = logging.getLogger(__name__)
 
-# Aggregator agent — shared singleton, warmed at startup
+# Aggregator agent &mdash; shared singleton, warmed at startup
 # ---------------------------------------------------------------------------
 
 _aggregator = None   # AggregatorAgent | None; set by _boot_aggregator if feed.enabled
@@ -54,7 +54,7 @@ def _boot_tariff_shock(scheduler) -> None:
         tariff_shock.enabled=false  -> this function returns early
                                     -> _tariff_shock_agent stays None
                                     -> agent_detail() renders inactive placeholder
-        No registry-status flip is needed to roll back — the flag alone controls it.
+        No registry-status flip is needed to roll back &mdash; the flag alone controls it.
         Setting enabled=true re-activates by restarting the app.
     """
     global _tariff_shock_agent
@@ -69,7 +69,7 @@ def _boot_tariff_shock(scheduler) -> None:
         if not ts_cfg.get("enabled", False):
             _log.info(
                 "TariffShockAgent disabled (tariff_shock.enabled=false) "
-                "— tab will render inactive placeholder"
+                "&mdash; tab will render inactive placeholder"
             )
             return
 
@@ -84,7 +84,7 @@ def _boot_tariff_shock(scheduler) -> None:
             len(stub_volumes), list(stub_volumes.keys()),
         )
     except Exception:
-        _log.exception("TariffShockAgent boot failed — tab will render inactive placeholder")
+        _log.exception("TariffShockAgent boot failed &mdash; tab will render inactive placeholder")
 
 
 def _boot_aggregator() -> None:
@@ -99,11 +99,11 @@ def _boot_aggregator() -> None:
         _aggregator is set synchronously before the background thread fires.
         If the route is hit during warm-up, recent_feed() calls list_recent()
         on an empty store and returns [].  The route then falls back to the
-        simulator — never a 500.
+        simulator &mdash; never a 500.
 
     File-backed store (adjustment 2):
         db_path comes from aggregator.store.db_path in config.yaml
-        ("aggregator/data/rates.db") — never ":memory:".  RateStore opens a
+        ("aggregator/data/rates.db") &mdash; never ":memory:".  RateStore opens a
         fresh sqlite3 connection per call (the WAL else-branch), so the
         scheduler thread (writer) and the route thread (reader) never share a
         connection object.  WAL allows them to proceed concurrently.
@@ -121,12 +121,12 @@ def _boot_aggregator() -> None:
         feed_cfg = agg_cfg.get("feed", {})
 
         if not feed_cfg.get("enabled", False):
-            _log.info("Aggregator feed disabled (aggregator.feed.enabled=false) — using simulator")
+            _log.info("Aggregator feed disabled (aggregator.feed.enabled=false) &mdash; using simulator")
             return
 
         _agg_max_entries = int(feed_cfg.get("max_entries", 25))
         db_path: str = agg_cfg.get("store", {}).get("db_path", "aggregator/data/rates.db")
-        # Adjustment 2 — the store-path line: file-backed, never :memory:
+        # Adjustment 2 &mdash; the store-path line: file-backed, never :memory:
         lanes: list = agg_cfg.get("refresh", {}).get("lanes", [])
 
         db_dir = os.path.dirname(db_path)
@@ -142,7 +142,7 @@ def _boot_aggregator() -> None:
                 _log.info("Aggregator: store warmed (%d lane(s))", len(lanes))
             except Exception:
                 _log.warning(
-                    "Aggregator warm-up incomplete — feed falls back to simulator "
+                    "Aggregator warm-up incomplete &mdash; feed falls back to simulator "
                     "until the scheduler's first successful run"
                 )
             # Subscribe TariffShockAgent before the first scheduler tick so no
@@ -153,7 +153,7 @@ def _boot_aggregator() -> None:
         threading.Thread(target=_warm_and_start, daemon=True, name="aggregator-warmup").start()
 
     except Exception:
-        _log.exception("Aggregator boot failed — /api/tariff-feed will use the simulator")
+        _log.exception("Aggregator boot failed &mdash; /api/tariff-feed will use the simulator")
 
 
 _boot_aggregator()
@@ -196,7 +196,7 @@ def _render_action_log_rows(limit: int | None = None) -> str:
 
     rows = ""
     for item in entries:
-        remarks = (item.get("remarks") or "—").replace("\n", "<br>")
+        remarks = (item.get("remarks") or "&mdash;").replace("\n", "<br>")
         rows += f"""
         <tr>
           <td>{item['role']}</td>
@@ -238,10 +238,10 @@ def _run_ai_in_thread(system: str, user: str) -> str:
 def _strip_reasoning(text: str) -> str:
     """Remove model chain-of-thought artifacts before the actual summary.
 
-    Qwen3 thinking models can emit <think>…</think> blocks or plain-text
+    Qwen3 thinking models can emit <think>&hellip;</think> blocks or plain-text
     reasoning prefixes.  Strip both so only the clean summary reaches the UI.
     """
-    # Remove <think>…</think> blocks (Qwen3 extended-thinking format)
+    # Remove <think>&hellip;</think> blocks (Qwen3 extended-thinking format)
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
     text = text.strip()
 
@@ -260,12 +260,12 @@ def _strip_reasoning(text: str) -> str:
 
 
 def _fallback_summary(context: dict) -> str:
-    rate  = context.get("fta_capture_rate_pct", "—")
-    risk  = context.get("value_at_risk_m", "—")
-    flags = context.get("open_compliance_flags", "—")
+    rate  = context.get("fta_capture_rate_pct", "&mdash;")
+    risk  = context.get("value_at_risk_m", "&mdash;")
+    flags = context.get("open_compliance_flags", "&mdash;")
     return (
         f"Your FTA capture rate of {rate}% signals meaningful preferential-duty "
-        f"opportunities remain unclaimed — prioritise an origin-qualification review. "
+        f"opportunities remain unclaimed &mdash; prioritise an origin-qualification review. "
         f"With ${risk}M at risk and {flags} open compliance flags, immediate attention "
         f"to screening and tariff-mitigation planning is advised."
     )
@@ -285,11 +285,11 @@ def generate_ai_explanation(context: dict) -> str:
 
     now = time.time()
     with _ai_cache["lock"]:
-        # Cache hit — return immediately
+        # Cache hit &mdash; return immediately
         if _ai_cache["text"] and (now - _ai_cache["ts"]) < _AI_CACHE_TTL:
             return _ai_cache["text"]
 
-        # Already fetching — return fallback so this request doesn't block
+        # Already fetching &mdash; return fallback so this request doesn't block
         if _ai_cache["in_flight"]:
             return _fallback_summary(context)
 
@@ -297,9 +297,9 @@ def generate_ai_explanation(context: dict) -> str:
 
     system_prompt = (
         "You are TradeNavigator AI, a senior global trade advisor briefing the C-suite.\n"
-        "Your ONLY output is a 3–4 sentence executive trade posture summary. "
+        "Your ONLY output is a 3&ndash;4 sentence executive trade posture summary. "
         "Follow these rules exactly:\n"
-        "1. Output ONLY the summary — no thinking, no reasoning steps, no preamble, "
+        "1. Output ONLY the summary &mdash; no thinking, no reasoning steps, no preamble, "
         "no 'here is the summary', no 'based on the data' opener.\n"
         "2. Use the exact figures provided. Do not round or invent numbers.\n"
         "3. Cover one key OPPORTUNITY and one key RISK with brief impact reasoning "
@@ -337,7 +337,7 @@ def generate_ai_explanation(context: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# API endpoint — JS fetches this after page paint; never blocks page load
+# API endpoint &mdash; JS fetches this after page paint; never blocks page load
 # ---------------------------------------------------------------------------
 
 @app.route("/api/posture-summary")
@@ -352,11 +352,11 @@ def api_tariff_feed():
     """Return live tariff events and source monitoring data, filtered by active industry.
 
     Routing rules:
-      - specific industry + aggregator has matching lanes → filtered real feed
-      - specific industry + 0 matching lanes OR aggregator down  → no_industry_coverage
+      - specific industry + aggregator has matching lanes &rarr; filtered real feed
+      - specific industry + 0 matching lanes OR aggregator down  &rarr; no_industry_coverage
         response with empty feed; never falls back to simulator for specific industries
         (simulator headlines are not HS-scoped so they would mislead under an industry label)
-      - "all" + aggregator empty/down → system-health simulator fallback (unchanged)
+      - "all" + aggregator empty/down &rarr; system-health simulator fallback (unchanged)
 
     active_industry is an intentional part of the API response: it exposes the active
     scope to integrators and the ticker JS for empty-state rendering.
@@ -389,20 +389,20 @@ def api_tariff_feed():
                     "active_industry": ind_name,
                 })
             if not is_all:
-                # Aggregator running but 0 lanes match this industry → clean empty state
+                # Aggregator running but 0 lanes match this industry &rarr; clean empty state
                 return _no_coverage()
-            # is_all + empty aggregator → fall through to system-health simulator
+            # is_all + empty aggregator &rarr; fall through to system-health simulator
         except Exception:
             _log.exception("Aggregator feed path failed")
             if not is_all:
                 return _no_coverage()
-            # is_all + exception → fall through to system-health simulator
+            # is_all + exception &rarr; fall through to system-health simulator
 
     if not is_all:
         # Aggregator not configured; still no simulator for specific industries
         return _no_coverage()
 
-    # "all" + aggregator empty/down → system-health simulator fallback (unchanged behaviour)
+    # "all" + aggregator empty/down &rarr; system-health simulator fallback (unchanged behaviour)
     return jsonify({
         "sources":         get_tariff_sources(),
         "feed":            get_tariff_feed(),
@@ -417,8 +417,8 @@ def api_tariff_shock():
     Filtering:
       - Reports (dict keyed by lane_key): filter on the structured hs6 field in each report.
       - Alerts: filter on the structured hs6 field added by alert_adapter.to_alert().
-      - "all" → no filter, current behaviour unchanged.
-      - Specific industry + 0 matching alerts AND 0 matching reports → no_industry_coverage.
+      - "all" &rarr; no filter, current behaviour unchanged.
+      - Specific industry + 0 matching alerts AND 0 matching reports &rarr; no_industry_coverage.
         This mirrors /api/tariff-feed: never show all-industry data under an industry label.
 
     active_industry is an intentional API field exposing the active scope.
@@ -483,7 +483,7 @@ def api_action_log():
             "role": payload.get("role", "Supervisor"),
             "taskId": payload.get("taskId", "unknown"),
             "taskText": payload.get("taskText", "Unnamed task"),
-            "completedOn": payload.get("completedOn", "—"),
+            "completedOn": payload.get("completedOn", "&mdash;"),
             "remarks": payload.get("remarks", ""),
             "status": "Completed",
         }
@@ -511,7 +511,7 @@ body {
     line-height: 1.4;
 }
 
-/* ── Design tokens ────────────────────────────────────────────── */
+/* â”€â”€ Design tokens â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 :root {
     --accent:      #A100FF;
     --accent-dim:  rgba(161,0,255,0.07);
@@ -528,7 +528,7 @@ body {
     --sidebar-w:   220px;
 }
 
-/* ── Sidebar ─────────────────────────────────────────────────── */
+/* â”€â”€ Sidebar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .sidebar {
     width: var(--sidebar-w);
     min-height: 100vh;
@@ -612,6 +612,32 @@ body {
     letter-spacing: 0.5px;
 }
 .nav-agent.coming-soon { opacity: 0.38; }
+.nav-sub {
+    display: flex; align-items: center; gap: 6px;
+    padding: 3px 14px 3px 36px;
+    color: rgba(255,255,255,0.38);
+    text-decoration: none;
+    font-size: 0.65rem;
+    transition: background 0.1s;
+    position: relative;
+}
+.nav-sub:hover { background: rgba(255,255,255,0.04); color: rgba(255,255,255,0.68); }
+.nav-sub.active {
+    color: #fff; font-weight: 600;
+    border-left: 2px solid #A100FF;
+    padding-left: 34px;
+    background: rgba(161,0,255,0.08);
+}
+.nav-sub .soon-tag {
+    margin-left: auto;
+    font-size: 0.54rem;
+    background: rgba(255,255,255,0.06);
+    color: rgba(255,255,255,0.28);
+    padding: 1px 5px;
+    border-radius: 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
 .nav-icon {
     width: 13px; height: 13px;
     flex-shrink: 0; vertical-align: middle;
@@ -619,7 +645,7 @@ body {
     display: inline-block;
 }
 
-/* ── Main content ────────────────────────────────────────────── */
+/* â”€â”€ Main content â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .main {
     margin-left: var(--sidebar-w);
     flex: 1; display: flex; flex-wrap: nowrap;
@@ -634,7 +660,7 @@ body {
     padding-top: calc(40px + 14px);
 }
 
-/* ── Top bar ─────────────────────────────────────────────────── */
+/* â”€â”€ Top bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .topbar {
     position: fixed;
     top: 0; left: var(--sidebar-w); right: 0; height: 40px;
@@ -689,7 +715,7 @@ body {
     .main-content { padding-top: calc(40px + 12px); }
 }
 
-/* ── Cards & generic sections ────────────────────────────────── */
+/* â”€â”€ Cards & generic sections â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .page-shell { display: grid; gap: 10px; }
 .page-card {
     background: var(--surface);
@@ -716,7 +742,7 @@ body {
     color: var(--text-1); margin-top: 3px;
 }
 
-/* ── KPI strip ───────────────────────────────────────────────── */
+/* â”€â”€ KPI strip â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .kpi-strip {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -736,7 +762,7 @@ body {
 .kpi-value { font-size: 1.3rem; font-weight: 700; color: var(--text-1); margin-top: 3px; }
 .kpi-unit  { font-size: 0.68rem; color: var(--text-3); margin-top: 1px; }
 
-/* ── AI summary ──────────────────────────────────────────────── */
+/* â”€â”€ AI summary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .ai-summary {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -751,7 +777,7 @@ body {
 .ai-summary .ai-text  { font-size: 0.78rem; color: var(--text-1); line-height: 1.55; margin-top: 2px; }
 .ai-loading { color: var(--text-3); font-style: italic; font-size: 0.76rem; margin-top: 2px; }
 
-/* ── Section card ────────────────────────────────────────────── */
+/* â”€â”€ Section card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .section-card {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -768,7 +794,7 @@ body {
     background: var(--surface-2);
 }
 
-/* ── Tables ─────────────────────────────────────────────────── */
+/* â”€â”€ Tables â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .log-table {
     width: 100%;
     border-collapse: collapse;
@@ -790,7 +816,7 @@ body {
 }
 .log-table tbody tr:hover { background: #FAFAFA; }
 
-/* ── Alerts ──────────────────────────────────────────────────── */
+/* â”€â”€ Alerts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .alert-row {
     display: flex; align-items: flex-start; gap: 10px;
     padding: 7px 12px;
@@ -805,7 +831,7 @@ body {
 .alert-msg { flex: 1; color: var(--text-1); line-height: 1.4; }
 .alert-ts  { font-size: 0.64rem; color: var(--text-3); white-space: nowrap; }
 
-/* ── Badge / pill ─────────────────────────────────────────────── */
+/* â”€â”€ Badge / pill â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .badge-pill {
     display: inline-flex; align-items: center; gap: 4px;
     padding: 2px 6px; border-radius: 2px;
@@ -813,7 +839,7 @@ body {
     font-size: 0.64rem; font-weight: 600;
 }
 
-/* ── Agent grid ─────────────────────────────────────────────── */
+/* â”€â”€ Agent grid â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .cluster-section { margin-bottom: 6px; }
 .cluster-section h3 {
     font-size: 0.64rem; font-weight: 700; text-transform: uppercase;
@@ -847,7 +873,7 @@ body {
 .status-live { background: rgba(13,122,91,0.10); color: var(--green); }
 .status-soon { background: var(--surface-2); color: var(--text-3); }
 
-/* ── Agent detail header ─────────────────────────────────────── */
+/* â”€â”€ Agent detail header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .agent-detail-header {
     border-radius: 4px; padding: 14px 18px; margin-bottom: 12px;
     color: #fff; display: flex; align-items: center; gap: 13px;
@@ -863,7 +889,7 @@ body {
 .coming-soon-box h2 { font-size: 0.9rem; font-weight: 700; margin-bottom: 5px; }
 .coming-soon-box p  { font-size: 0.76rem; color: var(--text-2); max-width: 340px; margin: 0 auto; }
 
-/* ── Page header (Control Tower) ─────────────────────────────── */
+/* â”€â”€ Page header (Control Tower) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .page-header {
     background: #16161E;
     color: #fff;
@@ -898,7 +924,7 @@ body {
 }
 .role-switcher select option { color: var(--text-1); }
 
-/* ── Overview band ───────────────────────────────────────────── */
+/* â”€â”€ Overview band â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .overview-band { display:grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
 .overview-card {
     background: var(--surface); border: 1px solid var(--border);
@@ -907,7 +933,7 @@ body {
 .overview-label { font-size: 0.62rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.9px; color: var(--accent); }
 .overview-title { font-size: 0.8rem; font-weight: 600; color: var(--text-1); margin-top: 3px; line-height: 1.4; }
 
-/* ── Industry context bar ─────────────────────────────────────── */
+/* â”€â”€ Industry context bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .industry-context-bar {
     display: flex; align-items: center; gap: 6px;
     padding: 5px 11px;
@@ -920,7 +946,7 @@ body {
 .industry-context-bar strong { color: var(--accent); font-weight: 600; }
 .industry-context-bar i { width: 12px; height: 12px; flex-shrink: 0; color: var(--text-3); }
 
-/* ── Role to-do ──────────────────────────────────────────────── */
+/* â”€â”€ Role to-do â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .role-todo {
     background: var(--surface); border: 1px solid var(--border);
     border-radius: 4px; padding: 10px 12px;
@@ -982,7 +1008,7 @@ body {
 .todo-modal-actions .save-btn   { background: var(--text-1); color: #fff; }
 .todo-modal-actions .cancel-btn { background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border); }
 
-/* ── Misc ────────────────────────────────────────────────────── */
+/* â”€â”€ Misc â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .back-link {
     display: inline-flex; align-items: center; gap: 5px;
     color: var(--accent); text-decoration: none; font-size: 0.74rem; font-weight: 600;
@@ -1002,7 +1028,7 @@ body {
     .page-header { flex-direction: column; align-items: flex-start; }
 }
 
-/* ── Bottom tariff ticker ─────────────────────────────────────── */
+/* â”€â”€ Bottom tariff ticker â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 :root { --sidebar-w: 220px; }
 @media (max-width: 760px) { :root { --sidebar-w: 0px; } }
 .ticker-wrap {
@@ -1056,7 +1082,7 @@ body {
     letter-spacing:inherit; text-transform:inherit; cursor:pointer; padding:0; }
 .ticker-label-btn:hover { text-decoration:underline; }
 
-/* ── Ticker live dot ──────────────────────────────────────────── */
+/* â”€â”€ Ticker live dot â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .ticker-dot {
     display: inline-block; width: 5px; height: 5px;
     border-radius: 50%; background: #4ade80; flex-shrink: 0;
@@ -1067,7 +1093,7 @@ body {
     50%       { opacity: 0.35; }
 }
 
-/* ── Ticker feed dialog ────────────────────────────────────────── */
+/* â”€â”€ Ticker feed dialog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .tf-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.48);
     z-index:600; align-items:center; justify-content:center; }
 .tf-overlay.open { display:flex; }
@@ -1087,7 +1113,7 @@ body {
     border-left:2px solid #d97706; border-radius:0 2px 2px 0;
     font-size:0.67rem; color:#78350f; }
 
-/* ── Right tariff pane ─────────────────────────────────────────── */
+/* â”€â”€ Right tariff pane â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .tariff-pane-header {
     padding: 9px 13px; border-bottom: 1px solid var(--border);
     background: var(--surface-2);
@@ -1130,7 +1156,7 @@ body {
 }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
-/* ── AI Chat Widget ────────────────────────────────────────────── */
+/* â”€â”€ AI Chat Widget â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .ai-chat-trigger {
     margin: auto 12px 12px;
     background: #A100FF;
@@ -1274,7 +1300,7 @@ body {
     40% { opacity: 1; transform: scale(1.1); }
 }
 
-/* ── Rate-source dialog ────────────────────────────────────────── */
+/* â”€â”€ Rate-source dialog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .rs-overlay {
     display: none; position: fixed; inset: 0;
     background: rgba(0,0,0,0.42); z-index: 500;
@@ -1326,7 +1352,33 @@ body {
 .rate-cell-btn:hover { text-decoration: underline dotted var(--accent); }
 .rate-cell-info { font-size: 0.61rem; color: rgba(161,0,255,0.5); }
 
-/* ── Settings industry picker ───────────────────────────────── */
+/* â”€â”€ Category filter select (topbar) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+.cat-filter-wrap {
+    display: flex; align-items: center; gap: 6px;
+    margin-right: 10px;
+}
+.cat-filter-label {
+    font-size: 0.68rem; font-weight: 700; color: rgba(255,255,255,0.55);
+    text-transform: uppercase; letter-spacing: 0.8px; white-space: nowrap;
+}
+.cat-filter-select {
+    appearance: none; -webkit-appearance: none;
+    background: rgba(161,0,255,0.18) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23A100FF'/%3E%3C/svg%3E") no-repeat right 8px center;
+    background-size: 8px 5px;
+    border: 1.5px solid rgba(161,0,255,0.45);
+    border-radius: 6px;
+    color: #fff;
+    font-size: 0.76rem; font-weight: 600;
+    padding: 5px 26px 5px 10px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    min-width: 140px;
+}
+.cat-filter-select:hover { background-color: rgba(161,0,255,0.30); border-color: #A100FF; }
+.cat-filter-select:focus { outline: none; border-color: #A100FF; }
+.cat-filter-select option { background: #1a0533; color: #fff; }
+
+/* â”€â”€ Settings industry picker â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .settings-section { margin-bottom: 18px; }
 .settings-section-title {
     font-size: 0.64rem; font-weight: 700; text-transform: uppercase;
@@ -1357,6 +1409,12 @@ def _sidebar_html(active_id: str = "") -> str:
     for cluster in CLUSTERS:
         items = [a for a in AGENTS if a["cluster"] == cluster["name"]]
         rows = ""
+        _fta_sub_ids = {
+            "fta_hs_review":   ("/agent/fta/hs-code-review", "\U0001f3f7", "HS Code Review"),
+            "fta_risk_flags":  ("/agent/fta/risk-flags",     "\U0001f6a9", "Risk Flags (AI)"),
+            "fta_coo_valid":   ("/agent/fta/coo-validation", "\U0001f4cb", "CoO Validation"),
+            "fta_sourcing":    ("/agent/fta/sourcing",        "\U0001f504", "Sourcing Opps"),
+        }
         for a in items:
             cs_cls   = "coming-soon" if a["status"] == "coming_soon" else ""
             soon_tag = '<span class="soon-tag">Soon</span>' if a["status"] == "coming_soon" else ""
@@ -1365,6 +1423,14 @@ def _sidebar_html(active_id: str = "") -> str:
                 f'<a href="/agent/{a["id"]}" class="nav-agent {cs_cls} {active_cls}">'
                 f'{a["icon"]} {a["display_name"]}{soon_tag}</a>'
             )
+            if a["id"] == "fta_preferential":
+                for sub_id, (href, icon, label) in _fta_sub_ids.items():
+                    sub_active = "active" if active_id == sub_id else ""
+                    rows += (
+                        f'<a href="{href}" class="nav-sub {sub_active}">'
+                        f'{icon} {label}'
+                        f'<span class="soon-tag">Soon</span></a>'
+                    )
         cluster_blocks += (
             f'<div class="cluster-label" style="color:{cluster["color"]}">'
             f'{cluster["name"]}</div>{rows}'
@@ -1400,7 +1466,7 @@ BASE = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{{ title }} — TradeNavigator AI</title>
+<title>{{ title }} &mdash; TradeNavigator AI</title>
 <style>{{ css }}</style>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1408,8 +1474,9 @@ BASE = """<!DOCTYPE html>
 <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
 </head>
 <body>
-<!-- ── Workspace top bar ──────────────────────────────────────── -->
+<!-- â”€â”€ Workspace top bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
 <div class="topbar">
+  {% if topbar_extras is defined %}{{ topbar_extras | safe }}{% endif %}
   <div class="topbar-avatar-wrap">
     <button class="topbar-avatar" id="workspaceBtn" aria-label="Workspace">
       <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -1429,7 +1496,7 @@ BASE = """<!DOCTYPE html>
 <main class="main">
   <div class="main-content">
     {% if industry.name != 'all' %}
-    <div class="industry-context-bar"><i data-lucide="factory"></i><strong>{{ industry.display_name }}</strong> — {{ industry.descriptor }}</div>
+    <div class="industry-context-bar"><i data-lucide="factory"></i><strong>{{ industry.display_name }}</strong> &mdash; {{ industry.descriptor }}</div>
     {% endif %}
     {{ content | safe }}
     <div class="footer">TradeNavigator AI &mdash; Accenture &copy; 2025</div>
@@ -1447,7 +1514,7 @@ BASE = """<!DOCTYPE html>
   </div>
 </div>
 
-<!-- ── Ticker feed dialog ──────────────────────────────────────── -->
+<!-- â”€â”€ Ticker feed dialog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
 <div class="tf-overlay" id="tfOverlay" onclick="if(event.target===this)closeTfDialog()">
   <div class="tf-card">
     <div class="tf-header">
@@ -1459,7 +1526,7 @@ BASE = """<!DOCTYPE html>
 </div>
 {{ scripts | safe }}
 
-<!-- ── Rate source dialog ──────────────────────────────────────── -->
+<!-- â”€â”€ Rate source dialog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
 <div class="rs-overlay" id="rsOverlay" onclick="if(event.target===this)closeRsDialog()">
   <div class="rs-card">
     <button class="rs-close" onclick="closeRsDialog()" aria-label="Close">&#x2715;</button>
@@ -1468,11 +1535,11 @@ BASE = """<!DOCTYPE html>
     <div class="rs-rates">
       <div class="rs-rate-box">
         <div class="rs-rate-label">MFN Tariff</div>
-        <div class="rs-rate-val mfn" id="rsMfn">—</div>
+        <div class="rs-rate-val mfn" id="rsMfn">&mdash;</div>
       </div>
       <div class="rs-rate-box">
         <div class="rs-rate-label">Preferential</div>
-        <div class="rs-rate-val pref" id="rsPref">—</div>
+        <div class="rs-rate-val pref" id="rsPref">&mdash;</div>
       </div>
     </div>
     <div class="rs-honesty">
@@ -1483,7 +1550,7 @@ BASE = """<!DOCTYPE html>
   </div>
 </div>
 
-<!-- ── AI Assistant Chat Modal ──────────────────────────────────── -->
+<!-- â”€â”€ AI Assistant Chat Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
 <div class="ai-chat-overlay" id="ai-chat-overlay" onclick="closeAIChatOverlay(event)">
   <div class="ai-chat-panel">
 
@@ -1502,14 +1569,14 @@ BASE = """<!DOCTYPE html>
         <div class="chat-bubble bot">
           Hi! I&#39;m your <strong>FTA Advisor</strong>. Ask me anything about
           Free Trade Agreements, Rules of Origin, preferential tariffs, or
-          trade compliance — I&#39;ll help you navigate it.
+          trade compliance &mdash; I&#39;ll help you navigate it.
         </div>
       </div>
     </div>
 
     <div class="ai-chat-input-bar">
       <input type="text" id="chatInput"
-             placeholder="Ask about FTA eligibility, RoO, tariff rates…"
+             placeholder="Ask about FTA eligibility, RoO, tariff rates&hellip;"
              autocomplete="off">
       <button class="ai-chat-send-btn" id="chatSend" title="Send">&#x2191;</button>
     </div>
@@ -1533,7 +1600,7 @@ BASE = """<!DOCTYPE html>
   window.closeAIChat = closeAIChat;
   window.closeAIChatOverlay = closeAIChatOverlay;
 
-  // ── FTA Chat ──────────────────────────────────────────────────────────────
+  // â”€â”€ FTA Chat â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   function _appendMsg(role, html) {
     var box = document.getElementById('chatMessages');
     if (!box) return;
@@ -1555,7 +1622,7 @@ BASE = """<!DOCTYPE html>
     if (!box) return null;
     var row = document.createElement('div');
     row.className = 'chat-bubble-row bot';
-    row.innerHTML = '<div class="cb-avatar">🤖</div>'
+    row.innerHTML = '<div class="cb-avatar">ðŸ¤–</div>'
       + '<div class="chat-bubble bot"><div class="ai-chat-typing">'
       + '<span></span><span></span><span></span></div></div>';
     box.appendChild(row);
@@ -1590,7 +1657,7 @@ BASE = """<!DOCTYPE html>
     })
     .catch(function() {
       if (typing) typing.remove();
-      _appendMsg('bot', 'Connection error — please try again.');
+      _appendMsg('bot', 'Connection error &mdash; please try again.');
     })
     .finally(function() {
       if (btn) btn.disabled = false;
@@ -1625,21 +1692,21 @@ BASE = """<!DOCTYPE html>
   // Rate source info dialog
   var _RS_MSG = {
     'aggregator':         "Both MFN and FTA preferential rates sourced live from the USITC Harmonized Tariff Schedule via a configured connector. Rates reflect today's query.",
-    'aggregator_mfn_only':'MFN rate sourced live from the USITC HTS. No FTA preferential rate is available — either no trade agreement covers this origin/destination pair, or the lane is outside connector scope. Savings shown as — (uncomputable without a preferential rate).',
+    'aggregator_mfn_only':'MFN rate sourced live from the USITC HTS. No FTA preferential rate is available &mdash; either no trade agreement covers this origin/destination pair, or the lane is outside connector scope. Savings shown as &mdash; (uncomputable without a preferential rate).',
     'no_aggregator_data': 'No live rate data was returned for this lane. The aggregator connector found no matching schedule entry. Rates are unavailable until a connector is configured for this destination.',
     'upload':             'MFN and preferential rates come from your uploaded file (columns MFN_RATE / PREF_RATE). These values are not cross-checked against a live tariff schedule.',
-    'pending':            'Rate lookup is in progress. The aggregator is being queried for this lane — refresh to see updated values.'
+    'pending':            'Rate lookup is in progress. The aggregator is being queried for this lane &mdash; refresh to see updated values.'
   };
   function openRsDialog(el) {
     var src  = el.dataset.src  || 'pending';
     var mfn  = el.dataset.mfn;
     var pref = el.dataset.pref;
-    var fta  = el.dataset.fta  || '—';
+    var fta  = el.dataset.fta  || '&mdash;';
     var lane = el.dataset.lane || '';
-    document.getElementById('rsTitle').textContent   = 'Rate Data — ' + fta;
+    document.getElementById('rsTitle').textContent   = 'Rate Data &mdash; ' + fta;
     document.getElementById('rsLane').textContent    = lane;
-    document.getElementById('rsMfn').textContent     = mfn  ? mfn  + '%' : '—';
-    document.getElementById('rsPref').textContent    = pref ? pref + '%' : '—';
+    document.getElementById('rsMfn').textContent     = mfn  ? mfn  + '%' : '&mdash;';
+    document.getElementById('rsPref').textContent    = pref ? pref + '%' : '&mdash;';
     document.getElementById('rsHonesty').textContent = _RS_MSG[src] || 'Source: ' + src;
     document.getElementById('rsBadge').textContent   = src.replace(/_/g,' ').toUpperCase();
     document.getElementById('rsOverlay').classList.add('open');
@@ -1661,13 +1728,13 @@ BASE = """<!DOCTYPE html>
     }
   });
 
-  // ── Ticker feed dialog ────────────────────────────────────────────
+  // â”€â”€ Ticker feed dialog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   var _feedData = [];
   var _feedIndustryLabel = 'All Industries';
 
   function _tfEntryHtml(ev) {
     var illusHtml = ev.illustrative
-      ? '<div class="tf-illus">&#x26A0;&#xFE0F; Illustrative — not live data. This entry is from the system-health simulator, not a live tariff connector.</div>'
+      ? '<div class="tf-illus">&#x26A0;&#xFE0F; Illustrative &mdash; not live data. This entry is from the system-health simulator, not a live tariff connector.</div>'
       : '';
     var detailHtml = (ev.detail && ev.detail !== 'No additional details')
       ? '<div style="font-size:0.78rem;color:#555;line-height:1.5;margin-top:4px">' + ev.detail + '</div>'
@@ -1687,7 +1754,7 @@ BASE = """<!DOCTYPE html>
     var ev = _feedData[idx];
     if (!ev) return;
     var t = document.getElementById('tfTitle');
-    if (t) t.textContent = 'Rate Entry — ' + ev.source;
+    if (t) t.textContent = 'Rate Entry &mdash; ' + ev.source;
     var b = document.getElementById('tfBody');
     if (b) b.innerHTML = _tfEntryHtml(ev);
     document.getElementById('tfOverlay').classList.add('open');
@@ -1697,8 +1764,8 @@ BASE = """<!DOCTYPE html>
     var t = document.getElementById('tfTitle');
     var b = document.getElementById('tfBody');
     if (t) t.textContent = _feedData.length
-      ? 'Live Rates — ' + _feedIndustryLabel + ' (' + _feedData.length + ' entries)'
-      : 'Live Rates — ' + _feedIndustryLabel;
+      ? 'Live Rates &mdash; ' + _feedIndustryLabel + ' (' + _feedData.length + ' entries)'
+      : 'Live Rates &mdash; ' + _feedIndustryLabel;
     if (b) {
       b.innerHTML = _feedData.length
         ? _feedData.map(_tfEntryHtml).join('')
@@ -1722,7 +1789,7 @@ BASE = """<!DOCTYPE html>
   var _lrBtn = document.querySelector('.ticker-label-btn');
   if (_lrBtn) _lrBtn.addEventListener('click', openTfList);
 
-  // ── Bottom tariff ticker — polls /api/tariff-feed every 10s ───────
+  // â”€â”€ Bottom tariff ticker &mdash; polls /api/tariff-feed every 10s â”€â”€â”€â”€â”€â”€â”€
   var _tickerCache = '';
   function loadTicker() {
     fetch('/api/tariff-feed', {credentials: 'same-origin'})
@@ -1732,7 +1799,7 @@ BASE = """<!DOCTYPE html>
         var track = document.getElementById('tickerTrack');
         if (!inner) return;
 
-        // Specific industry with no aggregator coverage → static notice, no scroll
+        // Specific industry with no aggregator coverage &rarr; static notice, no scroll
         if (data.no_industry_coverage) {
           var lbl = data.industry_display_name || data.active_industry || 'this industry';
           _feedIndustryLabel = lbl;
@@ -1780,7 +1847,7 @@ BASE = """<!DOCTYPE html>
       .catch(function(err) {
         var inner = document.getElementById('tickerInner');
         if (inner && !inner.querySelector('.ticker-item'))
-          inner.innerHTML = '<span style="color:rgba(255,180,100,0.7);font-style:italic;padding-left:16px">&#9888; Feed temporarily unavailable — retrying</span>';
+          inner.innerHTML = '<span style="color:rgba(255,180,100,0.7);font-style:italic;padding-left:16px">&#9888; Feed temporarily unavailable &mdash; retrying</span>';
       });
   }
   loadTicker();
@@ -1794,7 +1861,7 @@ BASE = """<!DOCTYPE html>
 </html>"""
 
 # ---------------------------------------------------------------------------
-# Industry lens — session helper + route
+# Industry lens &mdash; session helper + route
 # ---------------------------------------------------------------------------
 
 def _current_industry() -> dict:
@@ -1814,11 +1881,15 @@ def set_industry():
 
 
 # ---------------------------------------------------------------------------
-# Control Tower (home) — renders instantly; AI summary fetched by JS
+# Control Tower (home) &mdash; renders instantly; AI summary fetched by JS
 # ---------------------------------------------------------------------------
 
 @app.route("/")
 def control_tower():
+    return redirect(url_for("agent_fta_preferential"))
+
+@app.route("/control-tower")
+def control_tower_page():
     industry  = _current_industry()
     is_all    = industry.get("name") == "all"
     ind_label = industry.get("display_name", industry.get("name", "all"))
@@ -1877,7 +1948,7 @@ def control_tower():
     role_todos = {
         "Supervisor": [
             {"id": "sup-1", "text": "Review cross-functional escalations and confirm owners."},
-            {"id": "sup-2", "text": "Approve this week’s trade-risk mitigation priorities."},
+            {"id": "sup-2", "text": "Approve this week&lsquo;s trade-risk mitigation priorities."},
             {"id": "sup-3", "text": "Check status of delayed customs and tariff actions."},
         ],
         "Analyst": [
@@ -1932,7 +2003,7 @@ def control_tower():
         <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap;">
           <div>
             <h1>Trade Control Tower</h1>
-            <div class="header-sub">Consolidated global trade intelligence — all agents, one view</div>
+            <div class="header-sub">Consolidated global trade intelligence &mdash; all agents, one view</div>
           </div>
           <div class="role-switcher">
             <span>View as</span>
@@ -2095,7 +2166,7 @@ def control_tower():
         todoTitle.textContent = role + ' to-do list';
         todoList.innerHTML = tasks.map(task => {
           const completedClass = task.completed ? ' completed' : '';
-          const meta = task.completed ? `<div class="task-meta">Completed ${task.completedOn}${task.remarks ? ' • ' + task.remarks : ''}</div>` : '';
+          const meta = task.completed ? `<div class="task-meta">Completed ${task.completedOn}${task.remarks ? ' â€¢ ' + task.remarks : ''}</div>` : '';
           return `
             <div class="role-todo-item${completedClass}" data-role="${role}" data-task-id="${task.id}">
               <span class="dot"></span>
@@ -2103,7 +2174,7 @@ def control_tower():
                 ${task.text}
                 ${meta}
               </div>
-              ${task.completed ? '<span class="todo-state-badge">✓ Done</span>' : '<button class="todo-complete-btn" type="button">Complete</button>'}
+              ${task.completed ? '<span class="todo-state-badge">âœ“ Done</span>' : '<button class="todo-complete-btn" type="button">Complete</button>'}
             </div>`;
         }).join('');
         bindTaskButtons();
@@ -2332,11 +2403,11 @@ def _build_fta_chat_context() -> str:
         coos  = fta_data_source.get_coo_requests()
         src   = fta_data_source.get_source_info()
     except Exception:
-        return "(Dashboard data temporarily unavailable — use general knowledge only.)"
+        return "(Dashboard data temporarily unavailable &mdash; use general knowledge only.)"
 
     if src.get("shipment_mode") != "uploaded":
         return (
-            "No shipment data uploaded yet — dashboard is in demo mode. "
+            "No shipment data uploaded yet &mdash; dashboard is in demo mode. "
             "For data-specific questions, advise the user to upload their FTA shipment "
             "data first. You can still answer general FTA knowledge questions."
         )
@@ -2415,10 +2486,10 @@ def api_fta_chat():
     if not message:
         return jsonify({"reply": "Please enter a question."})
 
-    # ── Build current-data context for this request ───────────────────────────
+    # â”€â”€ Build current-data context for this request â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     dashboard_ctx = _build_fta_chat_context()
 
-    # ── System prompt ─────────────────────────────────────────────────────────
+    # â”€â”€ System prompt â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     system = (
         "You are the FTA Advisor inside TradeNavigator AI, an Accenture"
         " trade-intelligence platform. You are a specialist in Free Trade"
@@ -2445,8 +2516,8 @@ def api_fta_chat():
         "RULES YOU MUST FOLLOW:\n"
         "1. SCOPE: You answer ONLY questions about FTAs, preferential trade, customs"
         "   duties, rules of origin, HS codes, trade compliance, and the dashboard"
-        "   data above. If the user asks about anything else — coding, general knowledge,"
-        "   news, weather, opinions, or topics unrelated to trade — respond with:\n"
+        "   data above. If the user asks about anything else &mdash; coding, general knowledge,"
+        "   news, weather, opinions, or topics unrelated to trade &mdash; respond with:\n"
         "   I'm focused on FTA and preferential trade topics. I can help with questions"
         "   about trade agreements, rules of origin, duty savings, or the data on this"
         "   dashboard. What would you like to know?\n"
@@ -2462,7 +2533,7 @@ def api_fta_chat():
         "   chain-of-thought text."
     )
 
-    # ── Call LLM ──────────────────────────────────────────────────────────────
+    # â”€â”€ Call LLM â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     try:
         reply = _run_ai_in_thread(system, message)
         reply = _strip_reasoning(reply)
@@ -2479,7 +2550,7 @@ def api_fta_chat():
 
 
 # ---------------------------------------------------------------------------
-# FTA & Preferential Trade — API endpoint + dedicated page
+# FTA & Preferential Trade &mdash; API endpoint + dedicated page
 # ---------------------------------------------------------------------------
 
 @app.route("/api/fta/explain", methods=["POST"])
@@ -2497,6 +2568,7 @@ def api_fta_explain():
     ro_status         = data.get("ro_status", "")          # human-readable label
     rvc_pct           = data.get("rvc_pct", 0)             # RVC_PCT
     rvc_threshold_pct = data.get("rvc_threshold_pct", 0)   # RVC_THRESHOLD
+    compliance_note   = data.get("compliance_note", "")    # from RoO assessment
 
     system_prompt = (
         "You are TradeNavigator AI, an expert FTA compliance advisor. "
@@ -2508,7 +2580,7 @@ def api_fta_explain():
         roo_sentence = (
             f"Its actual RVC_PCT is {rvc_pct}%, which falls just {rvc_threshold_pct - rvc_pct} "
             f"percentage point(s) short of the {rvc_threshold_pct}% RVC_THRESHOLD required "
-            f"under {fta_name} — a near-miss that could be resolved with targeted "
+            f"under {fta_name} &mdash; a near-miss that could be resolved with targeted "
             f"sourcing adjustments."
         )
     elif ro_status == "Qualified":
@@ -2523,11 +2595,15 @@ def api_fta_explain():
         )
 
     _action_verb = "qualifies for" if ro_status == "Qualified" else "does not qualify for" if ro_status == "Fail" else "is assessed under"
+    _note_clause = (
+        f" System compliance note for this product: {compliance_note}"
+        if compliance_note else ""
+    )
     user_prompt = (
         f"Assess whether shipment {shipment_id} ({product}, HS {hs_code}) from "
         f"{origin} to {destination} {_action_verb} {fta_name} preferential treatment. "
         f"Rules-of-origin: {roo_sentence} "
-        f"Estimated duty saving if qualified: ${est_saving_k}K. "
+        f"Estimated duty saving if qualified: ${est_saving_k}K.{_note_clause} "
         f"State the recommended immediate action. Tone: actionable, CFO-ready."
     )
 
@@ -2546,7 +2622,7 @@ def api_fta_explain():
                 f"TOR_ID {shipment_id} ({product}, CCNGN {hs_code}) has RVC_PCT {rvc_pct}%, "
                 f"falling {gap} pts short of the {rvc_threshold_pct}% RVC_THRESHOLD for {fta_name}. "
                 f"A targeted sourcing adjustment or supplier invoice restructure could close the gap. "
-                f"The ${est_saving_k}K duty saving is at risk — request a revised proof-of-origin "
+                f"The ${est_saving_k}K duty saving is at risk &mdash; request a revised proof-of-origin "
                 f"from the supplier within 5 business days."
             )
         elif ro_status == "Qualified":
@@ -2562,11 +2638,11 @@ def api_fta_explain():
                 f"TOR_ID {shipment_id} ({product}, CCNGN {hs_code}) does NOT qualify for {fta_name} "
                 f"preferential treatment: RVC_PCT {rvc_pct}% is below the {rvc_threshold_pct}% "
                 f"RVC_THRESHOLD required. MFN duties apply. "
-                f"To improve qualification, increase regional content — review sourcing with the supplier."
+                f"To improve qualification, increase regional content &mdash; review sourcing with the supplier."
             )
         else:
             text = (
-                f"TOR_ID {shipment_id} ({product}, CCNGN {hs_code}) — RoO qualification "
+                f"TOR_ID {shipment_id} ({product}, CCNGN {hs_code}) &mdash; RoO qualification "
                 f"cannot be confirmed under {fta_name} ({ro_status or 'status unknown'}). "
                 f"Upload a complete BoM and RoO rules file to enable a full assessment."
             )
@@ -2581,13 +2657,13 @@ def api_fta_explain():
 @app.route("/api/fta/upload/shipments", methods=["POST"])
 def fta_upload_shipments():
     """
-    Dual-mode upload endpoint — works both as a traditional form POST and via fetch().
+    Dual-mode upload endpoint &mdash; works both as a traditional form POST and via fetch().
 
     Detection: AJAX requests send Accept: application/json.
-      AJAX + native format  → JSON {"ok": true, "redirect": ...}
-      AJAX + needs mapping  → JSON {"needs_mapping": true, ...}
-      AJAX + parse error    → JSON {"ok": false, "error": ...}
-      Form POST (no JS)     → redirect after loading (native) or redirect with error msg
+      AJAX + native format  &rarr; JSON {"ok": true, "redirect": ...}
+      AJAX + needs mapping  &rarr; JSON {"needs_mapping": true, ...}
+      AJAX + parse error    &rarr; JSON {"ok": false, "error": ...}
+      Form POST (no JS)     &rarr; redirect after loading (native) or redirect with error msg
     """
     import fta_mapping as _fm
 
@@ -2610,7 +2686,7 @@ def fta_upload_shipments():
         raw_bytes = f.read()
         app.logger.info("[FTA upload] Read %d bytes from %s", len(raw_bytes), f.filename)
         df, columns, samples = fta_data_source.parse_for_mapping(raw_bytes, f.filename)
-        app.logger.info("[FTA upload] Parsed OK — %d rows, columns: %s", len(df), columns)
+        app.logger.info("[FTA upload] Parsed OK &mdash; %d rows, columns: %s", len(df), columns)
     except Exception as exc:
         app.logger.error("[FTA upload] Parse FAILED: %s", exc)
         if is_ajax:
@@ -2622,9 +2698,9 @@ def fta_upload_shipments():
         }
         return redirect(url_for("agent_fta_preferential"))
 
-    # ── Native SAP format: load directly (works with or without JS) ──────────
+    # â”€â”€ Native SAP format: load directly (works with or without JS) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if fta_data_source.is_native_format(columns):
-        app.logger.info("[FTA upload] Native SAP format detected — loading directly")
+        app.logger.info("[FTA upload] Native SAP format detected &mdash; loading directly")
         result = fta_data_source.upload_shipment_data(raw_bytes, f.filename)
         app.logger.info("[FTA upload] upload_shipment_data result: %s", result)
         if is_ajax:
@@ -2632,14 +2708,14 @@ def fta_upload_shipments():
                             "errors": result.get("errors", []),
                             "warnings": result.get("warnings", []),
                             "redirect": url_for("agent_fta_preferential")})
-        # Plain form POST — redirect so browser follows to the FTA page
+        # Plain form POST &mdash; redirect so browser follows to the FTA page
         return redirect(url_for("agent_fta_preferential"))
 
-    # ── Non-native columns — needs mapping ──────────────────────────────────
+    # â”€â”€ Non-native columns &mdash; needs mapping â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     app.logger.info("[FTA upload] Non-native columns, needs mapping: %s", columns)
 
     if not is_ajax:
-        # JS is not available — we can't show the mapping modal.
+        # JS is not available &mdash; we can't show the mapping modal.
         # Store a message instructing the user to use the SAP template or enable JS.
         fta_data_source._state["upload_shipment_msg"] = {
             "ok": False,
@@ -2653,7 +2729,7 @@ def fta_upload_shipments():
         }
         return redirect(url_for("agent_fta_preferential"))
 
-    # AJAX path — build mapping suggestions and return JSON
+    # AJAX path &mdash; build mapping suggestions and return JSON
     local_suggestion = _fm.local_map(columns)
     try:
         async def _do_llm():
@@ -2701,19 +2777,34 @@ def fta_upload_shipments():
 
 @app.route("/api/fta/status")
 def fta_status():
-    """Diagnostic endpoint — shows current data-source mode and row counts."""
+    """Diagnostic endpoint &mdash; shows current data-source mode and row counts."""
     import fta_data_source as _ds
     src = _ds.get_source_info()
     try:
         lanes = _ds.get_fta_lanes()
         ships = _ds.get_fta_shipments()
         kpis  = _ds.get_fta_kpis()
+        # Inspect raw shipment_df for status-column diagnostics
+        with _ds._lock:
+            _df = _ds._state.get("shipment_df")
+        _has_status = _df is not None and "shipment_status" in _df.columns
+        _status_vals = (
+            sorted(_df["shipment_status"].dropna().unique().tolist())
+            if _has_status else []
+        )
+        _lanes_shipped   = _ds.get_fta_lanes_by_status("shipped")
+        _lanes_intransit = _ds.get_fta_lanes_by_status("in_transit")
         return jsonify({
-            "source":           src,
-            "lane_count":       len(lanes),
-            "shipment_count":   len(ships),
-            "period_label":     kpis.get("period_label", ""),
-            "utilization_pct":  kpis.get("utilization_pct", 0),
+            "source":                src,
+            "lane_count":            len(lanes),
+            "shipment_count":        len(ships),
+            "period_label":          kpis.get("period_label", ""),
+            "utilization_pct":       kpis.get("utilization_pct", 0),
+            "shipment_df_columns":   list(_df.columns) if _df is not None else [],
+            "shipment_status_present": _has_status,
+            "shipment_status_values":  _status_vals,
+            "lanes_shipped_count":   len(_lanes_shipped),
+            "lanes_intransit_count": len(_lanes_intransit),
         })
     except Exception as exc:
         return jsonify({"source": src, "error": str(exc)})
@@ -2734,7 +2825,7 @@ def fta_apply_mapping():
     if not pending:
         return jsonify({
             "ok": False,
-            "errors": ["Upload session expired — please re-upload the file."],
+            "errors": ["Upload session expired &mdash; please re-upload the file."],
         })
 
     result = fta_data_source.apply_mapping_and_load_shipments(pending["df"], mapping)
@@ -2821,8 +2912,10 @@ def fta_template(which):
 @app.route("/agent/fta_preferential")
 def agent_fta_preferential():
     industry = _current_industry()
-    kpis         = fta_data_source.get_fta_kpis()
-    lanes        = fta_data_source.get_fta_lanes()
+    kpis            = fta_data_source.get_fta_kpis()
+    lanes           = fta_data_source.get_fta_lanes()
+    lanes_shipped   = fta_data_source.get_fta_lanes_by_status("shipped")
+    lanes_intransit = fta_data_source.get_fta_lanes_by_status("in_transit")
     shipments    = fta_data_source.get_fta_shipments()
     coo_requests = fta_data_source.get_coo_requests()
     roo_items    = fta_data_source.get_roo_assessments()
@@ -2830,9 +2923,12 @@ def agent_fta_preferential():
     source       = fta_data_source.get_source_info()
     s_msg, c_msg, b_msg, r_msg = fta_data_source.take_upload_messages()
 
-    # ── Industry filtering ──────────────────────────────────────────────────
+    # â”€â”€ Category filter param (URL query string: ?cat=laptops etc.) â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    cat = request.args.get("cat", "all").strip().lower()
+
+    # â”€â”€ Industry filtering â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # Apply BEFORE HTML rendering so KPIs, tables, and empty states all reflect
-    # the same filtered view. "all" → no filter (current behavior unchanged).
+    # the same filtered view. "all" &rarr; no filter (current behavior unchanged).
     # Filtering selects which rows surface; row content (honesty flags) is never modified.
     is_all    = industry.get("name") == "all"
     ind_label = industry.get("display_name", industry.get("name", "All Industries"))
@@ -2840,7 +2936,7 @@ def agent_fta_preferential():
     _no_industry_match = False   # distinct from _is_empty: data uploaded, none in this industry
 
     if not is_all and not _is_empty:
-        # Lanes — classify by representative HS code.
+        # Lanes &mdash; classify by representative HS code.
         # Preserves FIX-3 caveat: representative HS may not cover all products on the lane.
         lanes = [
             l for l in lanes
@@ -2849,34 +2945,40 @@ def agent_fta_preferential():
                 industry,
             )
         ]
-        # Shipments — classify by per-row hs_code (exact product match)
+        # Shipments &mdash; classify by per-row hs_code (exact product match)
         shipments = [
             s for s in shipments
             if classify_shipment({"hs_code": s.get("hs_code", "")}, industry)
         ]
-        # RoO assessments — classify by hs_code; unavailable-dict passes through unchanged
+        # RoO assessments &mdash; classify by hs_code; unavailable-dict passes through unchanged
         if isinstance(roo_items, list):
             roo_items = [
                 r for r in roo_items
                 if classify_shipment({"hs_code": r.get("hs_code", "")}, industry)
             ]
-        # CoO requests — no HS code in schema; filter by trade lane referenced.
-        # A CoO for "KR → US" belongs to that lane: if that lane isn't in the selected
+        # CoO requests &mdash; no HS code in schema; filter by trade lane referenced.
+        # A CoO for "KR &rarr; US" belongs to that lane: if that lane isn't in the selected
         # industry, the CoO is not industry-relevant. We parse our own internal format.
         _lane_od = {(l["origin"], l["destination"]) for l in lanes}
         coo_filtered = []
         for _c in coo_requests:
-            _parts = _c.get("lane", "").split(" → ")
+            _parts = _c.get("lane", "").split(" &rarr; ")
             if len(_parts) == 2 and (_parts[0].strip(), _parts[1].strip()) in _lane_od:
                 coo_filtered.append(_c)
         coo_requests = coo_filtered
-        # Roadmap — filter by lane_id; roadmap items reference their source lane directly
+        # Roadmap &mdash; filter by lane_id; roadmap items reference their source lane directly
         _lane_ids = {l["lane_id"] for l in lanes}
         roadmap = [item for item in roadmap if item.get("lane_id") in _lane_ids]
 
         _no_industry_match = not lanes and not shipments
+        # Apply same HS-based industry filter to status-split lane sets
+        _ind_lane_filter = lambda l: classify_shipment(
+            {"hs_code": l.get("representative_lane", {}).get("hs_code", "")}, industry
+        )
+        lanes_shipped   = [l for l in lanes_shipped   if _ind_lane_filter(l)]
+        lanes_intransit = [l for l in lanes_intransit if _ind_lane_filter(l)]
 
-        # Re-derive KPIs from filtered data — never all-industry totals under an industry label
+        # Re-derive KPIs from filtered data &mdash; never all-industry totals under an industry label
         if not kpis.get("empty") and not _no_industry_match:
             _f_elig  = sum(l["eligible_value_m"] for l in lanes)
             _f_claim = sum(l["claimed_value_m"]  for l in lanes)
@@ -2897,27 +2999,87 @@ def agent_fta_preferential():
             kpis["unclaimed_opportunity_m"] = None
             kpis["coo_outstanding"]         = None
 
+    # â”€â”€ Category filtering â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # Applied after industry filtering.  cat="all" or "" &rarr; no additional filter.
+    _cat_active = cat not in ("", "all")
+    if _cat_active and not _is_empty:
+        shipments = [
+            s for s in shipments
+            if s.get("product_category", "").lower() == cat
+        ]
+        if isinstance(roo_items, list):
+            roo_items = [
+                r for r in roo_items
+                if r.get("product_category", "").lower() == cat
+            ]
+        # Keep only lanes that have at least one matching shipment
+        _cat_lane_keys = {
+            (s["fta_name"], s["origin"], s["destination"]) for s in shipments
+        }
+        lanes = [
+            l for l in lanes
+            if (l["fta_name"], l["origin"], l["destination"]) in _cat_lane_keys
+        ]
+        _lane_ids_cat = {l["lane_id"] for l in lanes}
+        roadmap = [item for item in roadmap if item.get("lane_id") in _lane_ids_cat]
+        # Propagate category filter to status-split lane sets (by lane key)
+        _cat_keys_fin = {(l["fta_name"], l["origin"], l["destination"]) for l in lanes}
+        lanes_shipped   = [l for l in lanes_shipped   if (l["fta_name"], l["origin"], l["destination"]) in _cat_keys_fin]
+        lanes_intransit = [l for l in lanes_intransit if (l["fta_name"], l["origin"], l["destination"]) in _cat_keys_fin]
+        # Re-derive KPIs from category-filtered lanes
+        if not kpis.get("empty") and lanes:
+            _cf_elig  = sum(l["eligible_value_m"] for l in lanes)
+            _cf_claim = sum(l["claimed_value_m"]  for l in lanes)
+            _cf_uncl  = sum(
+                l["unclaimed_savings_k"] for l in lanes
+                if l["unclaimed_savings_k"] is not None
+            )
+            kpis = dict(kpis)
+            kpis["utilization_pct"]         = round(_cf_claim / _cf_elig * 100, 1) if _cf_elig else 0.0
+            kpis["unclaimed_opportunity_m"] = round(_cf_uncl / 1_000, 2)
+        elif not kpis.get("empty") and not lanes:
+            kpis = dict(kpis)
+            kpis["utilization_pct"]         = None
+            kpis["unclaimed_opportunity_m"] = None
+
     # Period label comes from the data source (dynamic for uploaded data)
     period_label = kpis.get("period_label", "")
 
-    # ── Header ──────────────────────────────────────────────────────────
+    # â”€â”€ Header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     _is_empty = (source["shipment_mode"] == "empty")
     if _is_empty:
-        _subtitle = 'Upload your shipment data to begin — tariff rates sourced from the live aggregator'
+        _subtitle = 'Upload your shipment data to begin &mdash; tariff rates sourced from the live aggregator'
     elif _no_industry_match:
         _subtitle = (
             f'No {ind_label} shipments in your uploaded data'
-            ' — switch to All Industries to see your full upload'
+            ' &mdash; switch to All Industries to see your full upload'
         )
     else:
-        _subtitle = 'Showing uploaded data — figures derived from your shipment and CoO files'
-    header_html = (
-        '<h2 style="font-size:1rem;font-weight:700;color:#1a0533;margin-bottom:16px;">'
-        'FTA &amp; Preferential Trade Agent</h2>'
+        _subtitle = 'Showing uploaded data &mdash; figures derived from your shipment and CoO files'
+    header_html = ""
+
+    # â”€â”€ Category filter dropdown (injected into the topbar via topbar_extras) â”€
+    _cat_opts_map = [
+        ("all",              "All Categories"),
+        ("laptops",          "Laptops"),
+        ("peripherals",      "Peripherals"),
+        ("server equipment", "Server Equipment"),
+    ]
+    _cat_opts_html = "".join(
+        f'<option value="{_cv}"{" selected" if cat == _cv else ""}>{_cl}</option>'
+        for _cv, _cl in _cat_opts_map
+    )
+    topbar_extras = (
+        '<div class="cat-filter-wrap">'
+        '<span class="cat-filter-label">Category</span>'
+        '<select class="cat-filter-select" '
+        "onchange=\"window.location.href='?cat='+encodeURIComponent(this.value)\">"
+        + _cat_opts_html +
+        '</select></div>'
     )
 
-    # ── Upload / data-source section ─────────────────────────────────────
-    # Build source badge — covers all four upload types
+    # â”€â”€ Upload / data-source section â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # Build source badge &mdash; covers all four upload types
     _badge_parts = []
     if source["shipment_mode"] == "uploaded":
         _badge_parts.append(f'Shipments: {source["shipment_filename"]}')
@@ -2938,22 +3100,22 @@ def agent_fta_preferential():
         _src_badge = (
             '<span style="padding:2px 10px;border-radius:4px;font-size:0.68rem;'
             'font-weight:700;background:#A100FF;color:#fff;letter-spacing:1px">'
-            f'UPLOADED · {" | ".join(_badge_parts)}</span>'
+            f'UPLOADED &middot; {" | ".join(_badge_parts)}</span>'
         )
 
-    # Build upload feedback banners — Shipment, CoO, BoM, RoO
+    # Build upload feedback banners &mdash; Shipment, CoO, BoM, RoO
     _feedback = ""
     for _msg, _label in [(s_msg, "Shipment"), (c_msg, "CoO"),
                          (b_msg, "BoM"), (r_msg, "RoO Rules")]:
         if not _msg:
             continue
         if _msg["ok"]:
-            _warn_str = (" — " + "; ".join(_msg["warnings"])) if _msg["warnings"] else ""
+            _warn_str = (" &mdash; " + "; ".join(_msg["warnings"])) if _msg["warnings"] else ""
             _feedback += (
                 f'<div style="margin:6px 0;padding:8px 12px;background:#e6fff9;'
                 f'border-left:3px solid #12B3A3;border-radius:0 6px 6px 0;'
                 f'font-size:0.78rem;color:#0a7060;font-weight:600">'
-                f'✓ {_label} data loaded{_warn_str}</div>'
+                f'âœ“ {_label} data loaded{_warn_str}</div>'
             )
         else:
             _err_str = "; ".join(_msg["errors"])
@@ -2961,7 +3123,7 @@ def agent_fta_preferential():
                 f'<div style="margin:6px 0;padding:8px 12px;background:#fde8e8;'
                 f'border-left:3px solid #c0392b;border-radius:0 6px 6px 0;'
                 f'font-size:0.78rem;color:#c0392b;font-weight:600">'
-                f'✗ {_label} upload failed: {_err_str}</div>'
+                f'âœ— {_label} upload failed: {_err_str}</div>'
             )
 
     # Auto-open the panel when there's a message or any upload is active
@@ -2972,7 +3134,7 @@ def agent_fta_preferential():
         or source.get("roo_mode") == "uploaded"
     ) else ""
 
-    # ── SAP source badge helper ──────────────────────────────────────────────
+    # â”€â”€ SAP source badge helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _sap_badge(label: str) -> str:
         return (
             f'<span style="font-size:0.6rem;font-weight:600;color:#888;'
@@ -2980,18 +3142,18 @@ def agent_fta_preferential():
             f'letter-spacing:0.5px;margin-left:auto">{label}</span>'
         )
 
-    # Country + code translation helpers (SAP codes → human-readable)
+    # Country + code translation helpers (SAP codes &rarr; human-readable)
     def _ctry(iso2: str) -> str:
         return _CTRY.get(iso2, iso2)
 
     def _dats_display(dats: str) -> str:
-        """SAP DATS YYYYMMDD → YYYY-MM-DD for display."""
+        """SAP DATS YYYYMMDD &rarr; YYYY-MM-DD for display."""
         s = str(dats)
         if len(s) == 8 and s.isdigit():
             return f"{s[:4]}-{s[4:6]}-{s[6:]}"
         return s
 
-    # ── Provenance helpers (pull from FIELD_DICTIONARY — single source of truth) ─
+    # â”€â”€ Provenance helpers (pull from FIELD_DICTIONARY &mdash; single source of truth) â”€
     _fd = {row[0]: row for row in _FIELD_DICTIONARY}
 
     def _field_json(sap_keys: list) -> str:
@@ -3004,7 +3166,7 @@ def agent_fta_preferential():
             rows.append({
                 "sap":  e[0],
                 "univ": e[1],
-                "prov": "green" if e[2] == "🟢" else "amber",
+                "prov": "green" if e[2] == "ðŸŸ¢" else "amber",
                 "fmt":  e[3],
                 "src":  e[5] if len(e) > 5 else "SAP GTS",
                 "long": e[6] if len(e) > 6 else e[4],
@@ -3017,7 +3179,7 @@ def agent_fta_preferential():
         entries = [_fd[k] for k in sap_keys if k in _fd]
         if not entries:
             return ""
-        all_green = all(e[2] == "🟢" for e in entries)
+        all_green = all(e[2] == "ðŸŸ¢" for e in entries)
         dot_col   = "#12B3A3" if all_green else "#F5A623"
         prov_code = "green" if all_green else "amber"
         data_json = _field_json(sap_keys)
@@ -3069,7 +3231,7 @@ def agent_fta_preferential():
     _roo_cols_str = ", ".join(fta_data_source.ROO_REQUIRED)
 
     _up_body_style = '' if _panel_open else 'display:none'
-    _up_arrow      = '▼' if _panel_open else '▶'
+    _up_arrow      = 'â–¼' if _panel_open else 'â–¶'
     upload_section = (
         '<div id="upPanel" style="margin-bottom:16px;border-radius:10px;'
         'box-shadow:0 4px 16px rgba(26,5,51,0.12);background:#fff;'
@@ -3078,7 +3240,7 @@ def agent_fta_preferential():
         'var b=document.getElementById(\'upBody\');'
         'var open=b.style.display===\'none\';'
         'b.style.display=open?\'\':\'none\';'
-        'h.querySelector(\'.up-arr\').textContent=open?\'▼\':\'▶\';'
+        'h.querySelector(\'.up-arr\').textContent=open?\'â–¼\':\'â–¶\';'
         '})(this)" '
         'style="padding:12px 20px;font-size:0.8rem;font-weight:700;'
         'text-transform:uppercase;letter-spacing:1px;'
@@ -3092,7 +3254,7 @@ def agent_fta_preferential():
         f'<div id="upBody" style="padding:16px 20px;{_up_body_style}">'
         + (_feedback if _feedback else "")
         + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:8px">'
-        # ── Shipment upload ──
+        # â”€â”€ Shipment upload â”€â”€
         '<div style="border:1px solid #ede8f8;border-radius:8px;padding:14px">'
         '<div style="font-size:0.82rem;font-weight:700;margin-bottom:4px">'
         '\U0001f4e6 Shipment Data'
@@ -3118,13 +3280,13 @@ def agent_fta_preferential():
         '\U0001f4e5 Template</a>'
         '</form>'
         '</div>'
-        # ── CoO upload ──
+        # â”€â”€ CoO upload â”€â”€
         '<div style="border:1px solid #ede8f8;border-radius:8px;padding:14px">'
         '<div style="font-size:0.82rem;font-weight:700;margin-bottom:4px">'
         '\U0001f4cb CoO Requests <span style="font-size:0.7rem;font-weight:400;color:#999">(optional)</span>'
         '</div>'
         '<div style="font-size:0.72rem;color:#888;margin-bottom:10px">'
-        'Powers: CoO Supplier Tracker — independent of shipment data'
+        'Powers: CoO Supplier Tracker &mdash; independent of shipment data'
         '</div>'
         f'<details style="margin-bottom:10px"><summary style="font-size:0.7rem;'
         f'color:#A100FF;cursor:pointer">Expected columns</summary>'
@@ -3142,13 +3304,13 @@ def agent_fta_preferential():
         '\U0001f4e5 Template</a>'
         '</form>'
         '</div>'
-        # ── BoM upload ──
+        # â”€â”€ BoM upload â”€â”€
         '<div style="border:1px solid #ede8f8;border-radius:8px;padding:14px">'
         '<div style="font-size:0.82rem;font-weight:700;margin-bottom:4px">'
         '\U0001f9e9 Bill of Materials <span style="font-size:0.7rem;font-weight:400;color:#999">(optional)</span>'
         '</div>'
         '<div style="font-size:0.72rem;color:#888;margin-bottom:10px">'
-        'Powers: BoM-based RVC computation — product_id must match shipment upload'
+        'Powers: BoM-based RVC computation &mdash; product_id must match shipment upload'
         '</div>'
         f'<details style="margin-bottom:10px"><summary style="font-size:0.7rem;'
         f'color:#A100FF;cursor:pointer">Expected columns</summary>'
@@ -3166,13 +3328,13 @@ def agent_fta_preferential():
         '\U0001f4e5 Template</a>'
         '</form>'
         '</div>'
-        # ── RoO Rules upload ──
+        # â”€â”€ RoO Rules upload â”€â”€
         '<div style="border:1px solid #ede8f8;border-radius:8px;padding:14px">'
         '<div style="font-size:0.82rem;font-weight:700;margin-bottom:4px">'
         '\U0001f4dc Rules of Origin <span style="font-size:0.7rem;font-weight:400;color:#999">(optional)</span>'
         '</div>'
         '<div style="font-size:0.72rem;color:#888;margin-bottom:10px">'
-        'Powers: RoO threshold lookup — replaces roo_threshold_pct column when uploaded'
+        'Powers: RoO threshold lookup &mdash; replaces roo_threshold_pct column when uploaded'
         '</div>'
         f'<details style="margin-bottom:10px"><summary style="font-size:0.7rem;'
         f'color:#A100FF;cursor:pointer">Expected columns</summary>'
@@ -3197,7 +3359,7 @@ def agent_fta_preferential():
             '<form action="/api/fta/reset" method="post" style="display:inline">'
             '<button type="submit" style="padding:5px 14px;background:#fff;color:#888;'
             'border:1px solid #ddd;border-radius:6px;font-size:0.75rem;cursor:pointer">'
-            '↩ Clear uploads</button>'
+            'â†© Clear uploads</button>'
             '</form>'
             '<span style="font-size:0.68rem;color:#bbb">'
             'Removes all uploaded files and returns to the empty state</span>'
@@ -3207,20 +3369,20 @@ def agent_fta_preferential():
         + '</div></div>'
     )
 
-    # ── KPI strip (4 cards) ──────────────────────────────────────────────
-    _util_val = f'{kpis["utilization_pct"]}%' if kpis["utilization_pct"] is not None else "—"
-    _uncl_val = f'${kpis["unclaimed_opportunity_m"]}M' if kpis["unclaimed_opportunity_m"] is not None else "—"
-    _coo_val  = str(kpis["coo_outstanding"]) if kpis["coo_outstanding"] is not None else "—"
-    # FIX A: retroactive claims — None means uncomputable, not zero
+    # â”€â”€ KPI strip (4 cards) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    _util_val = f'{kpis["utilization_pct"]}%' if kpis["utilization_pct"] is not None else "&mdash;"
+    _uncl_val = f'${kpis["unclaimed_opportunity_m"]}M' if kpis["unclaimed_opportunity_m"] is not None else "&mdash;"
+    _coo_val  = str(kpis["coo_outstanding"]) if kpis["coo_outstanding"] is not None else "&mdash;"
+    # FIX A: retroactive claims &mdash; None means uncomputable, not zero
     if kpis["retroactive_claims_k"] is None:
         _retro_val   = "Not available"
         _retro_unit  = "Requires retro-eligibility data"
         _retro_style = "font-size:0.9rem;color:#bbb;font-weight:400"
     else:
         _retro_val   = f'${kpis["retroactive_claims_k"]}K'
-        _retro_unit  = f'{kpis["retro_window_label"]} · {period_label}'
+        _retro_unit  = f'{kpis["retro_window_label"]} &middot; {period_label}'
         _retro_style = ""
-    _period_suffix = f' · {period_label}' if period_label and period_label != "—" else ""
+    _period_suffix = f' &middot; {period_label}' if period_label and period_label != "&mdash;" else ""
     kpi_html = (
         f'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">'
         f'{prov_legend}'
@@ -3234,7 +3396,7 @@ def agent_fta_preferential():
         f'<div class="kpi-card" style="border-top:3px solid #F76C6C">'
         + _kpi_lbl("Unclaimed Opportunity", ["CUSVAL", "MFN_RATE", "PREF_RATE"]) +
         f'<div class="kpi-value">{_uncl_val}</div>'
-        f'<div class="kpi-unit">Duty savings · {period_label}</div></div>'
+        f'<div class="kpi-unit">Duty savings &middot; {period_label}</div></div>'
         f'<div class="kpi-card" style="border-top:3px solid #A100FF">'
         + _kpi_lbl("Retroactive Claims", ["ENTRY_DATE", "CUSVAL", "MFN_RATE", "PREF_RATE"]) +
         f'<div class="kpi-value" style="{_retro_style}">{_retro_val}</div>'
@@ -3246,7 +3408,7 @@ def agent_fta_preferential():
         '</div>'
     )
 
-    # ── Shared table-header cell style ───────────────────────────────────
+    # â”€â”€ Shared table-header cell style â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     th = (
         'style="padding:10px 12px;text-align:left;font-size:0.72rem;'
         'text-transform:uppercase;letter-spacing:1px;color:#888;font-weight:700;'
@@ -3264,71 +3426,70 @@ def agent_fta_preferential():
             f'</div></th>'
         )
 
-    # ── Lane utilization table ───────────────────────────────────────────
-    lane_rows = ""
-    if not lanes:
-        _lane_empty = (
-            f'No {ind_label} shipments in your uploaded data'
-            if _no_industry_match else
-            '\U0001f4c2 No shipment data — upload a file above to populate this table'
-        )
-        lane_rows = (
-            '<tr><td colspan="7" style="padding:32px;text-align:center;'
-            f'color:#999;font-size:0.85rem">{_lane_empty}</td></tr>'
-        )
-    for lane in lanes:
-        util      = lane["utilization_pct"]
-        uncl_k    = lane["unclaimed_savings_k"]
-        sc        = "#c0392b" if (uncl_k or 0) > 200 else "#1a0533"
-        orig_name = _ctry(lane["origin"])
-        dest_name = _ctry(lane["destination"])
-        mfn_str   = f'{lane["mfn_rate_pct"]}%'          if lane["mfn_rate_pct"]          is not None else "—"
-        pref_str  = f'{lane["preferential_rate_pct"]}%' if lane["preferential_rate_pct"] is not None else "—"
-        uncl_html = f'${uncl_k}K' if uncl_k is not None else '<span style="color:#bbb">—</span>'
-        _rs_mfn   = str(lane["mfn_rate_pct"])          if lane["mfn_rate_pct"]          is not None else ""
-        _rs_pref  = str(lane["preferential_rate_pct"]) if lane["preferential_rate_pct"] is not None else ""
-        _rs_lane  = f'{orig_name} → {dest_name}'
-        lane_rows += (
-            '<tr style="border-bottom:1px solid #f5f3fa">'
-            f'<td style="padding:10px 12px;font-size:0.82rem">'
-            f'{orig_name} → {dest_name}</td>'
-            f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600">'
-            f'{lane["fta_name"]}</td>'
-            f'<td style="padding:10px 12px;font-size:0.82rem">'
-            f'${lane["eligible_value_m"]}M</td>'
-            f'<td style="padding:10px 12px;font-size:0.82rem">'
-            f'${lane["claimed_value_m"]}M</td>'
-            f'<td style="padding:10px 12px;font-size:0.78rem;color:#555">'
-            f'<button class="rate-cell-btn" '
-            f'data-src="{lane["rates_source"]}" data-mfn="{_rs_mfn}" '
-            f'data-pref="{_rs_pref}" data-fta="{lane["fta_name"]}" '
-            f'data-lane="{_rs_lane}" onclick="openRsDialog(this)" '
-            f'title="Click to see rate source &amp; data honesty">'
-            f'<span style="color:#c0392b;font-weight:600">{mfn_str}</span>'
-            f' MFN → '
-            f'<span style="color:#12B3A3;font-weight:600">{pref_str}</span>'
-            f' pref'
-            f'<span class="rate-cell-info">&#x24D8;</span>'
-            f'</button></td>'
-            f'<td style="padding:10px 12px;font-size:0.82rem">'
-            f'<div style="background:#e8e0f0;border-radius:3px;height:6px;'
-            f'width:80px;display:inline-block">'
-            f'<div style="background:#A100FF;height:6px;border-radius:3px;'
-            f'width:{util}%"></div></div>'
-            f'<span style="margin-left:6px;font-size:0.75rem">{util}%</span></td>'
-            f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:{sc}">'
-            f'{uncl_html}</td>'
-            '</tr>'
-        )
+    # â”€â”€ Lane utilization table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    def _mk_lane_tbody(lane_list, empty_msg):
+        if not lane_list:
+            return (
+                '<tr><td colspan="7" style="padding:32px;text-align:center;'
+                f'color:#999;font-size:0.85rem">{empty_msg}</td></tr>'
+            )
+        rows = ""
+        for lane in lane_list:
+            util      = lane["utilization_pct"]
+            uncl_k    = lane["unclaimed_savings_k"]
+            sc        = "#c0392b" if (uncl_k or 0) > 200 else "#1a0533"
+            orig_name = _ctry(lane["origin"])
+            dest_name = _ctry(lane["destination"])
+            mfn_str   = f'{lane["mfn_rate_pct"]}%'          if lane["mfn_rate_pct"]          is not None else "&mdash;"
+            pref_str  = f'{lane["preferential_rate_pct"]}%' if lane["preferential_rate_pct"] is not None else "&mdash;"
+            uncl_html = f'${uncl_k}K' if uncl_k is not None else '<span style="color:#bbb">&mdash;</span>'
+            _rs_mfn   = str(lane["mfn_rate_pct"])          if lane["mfn_rate_pct"]          is not None else ""
+            _rs_pref  = str(lane["preferential_rate_pct"]) if lane["preferential_rate_pct"] is not None else ""
+            _rs_lane  = f'{orig_name} &rarr; {dest_name}'
+            rows += (
+                '<tr style="border-bottom:1px solid #f5f3fa">'
+                f'<td style="padding:10px 12px;font-size:0.82rem">'
+                f'{orig_name} &rarr; {dest_name}</td>'
+                f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600">'
+                f'{lane["fta_name"]}</td>'
+                f'<td style="padding:10px 12px;font-size:0.82rem">'
+                f'${lane["eligible_value_m"]}M</td>'
+                f'<td style="padding:10px 12px;font-size:0.82rem">'
+                f'${lane["claimed_value_m"]}M</td>'
+                f'<td style="padding:10px 12px;font-size:0.78rem;color:#555">'
+                f'<button class="rate-cell-btn" '
+                f'data-src="{lane["rates_source"]}" data-mfn="{_rs_mfn}" '
+                f'data-pref="{_rs_pref}" data-fta="{lane["fta_name"]}" '
+                f'data-lane="{_rs_lane}" onclick="openRsDialog(this)" '
+                f'title="Click to see rate source &amp; data honesty">'
+                f'<span style="color:#c0392b;font-weight:600">{mfn_str}</span>'
+                f' MFN &rarr; '
+                f'<span style="color:#12B3A3;font-weight:600">{pref_str}</span>'
+                f' pref'
+                f'<span class="rate-cell-info">&#x24D8;</span>'
+                f'</button></td>'
+                f'<td style="padding:10px 12px;font-size:0.82rem">'
+                f'<div style="background:#e8e0f0;border-radius:3px;height:6px;'
+                f'width:80px;display:inline-block">'
+                f'<div style="background:#A100FF;height:6px;border-radius:3px;'
+                f'width:{util}%"></div></div>'
+                f'<span style="margin-left:6px;font-size:0.75rem">{util}%</span></td>'
+                f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:{sc}">'
+                f'{uncl_html}</td>'
+                '</tr>'
+            )
+        return rows
 
-    lane_section = (
-        '<div class="section-card">'
-        f'<div class="section-card-header">\U0001f310 FTA Lane Utilization Gap'
-        f'<span style="font-size:0.72rem;font-weight:400;color:#888;'
-        f'margin-left:10px;letter-spacing:0">({period_label})</span>'
-        f'{_sap_badge("SAP TM + GTS")}</div>'
-        '<div style="overflow-x:auto;max-height:300px;overflow-y:auto">'
-        '<table style="width:100%;border-collapse:collapse">'
+    _lane_empty_all = (
+        f'No {ind_label} shipments in your uploaded data'
+        if _no_industry_match else
+        '\U0001f4c2 No shipment data &mdash; upload a file above to populate this table'
+    )
+    _tbody_all      = _mk_lane_tbody(lanes,         _lane_empty_all)
+    _tbody_shipped  = _mk_lane_tbody(lanes_shipped,  "No Shipped / Delivered shipments in this view")
+    _tbody_intransit= _mk_lane_tbody(lanes_intransit,"No In-Transit shipments in this view")
+
+    _lane_thead = (
         '<thead><tr>'
         + _pth("Trade Lane", ["CTYDP", "CTYAR"])
         + _pth("FTA Agreement", ["AGREEMENT"])
@@ -3336,45 +3497,129 @@ def agent_fta_preferential():
         + _pth("Claimed", ["CUSVAL", "PREF_STATUS"])
         + _pth("Rate Differential", ["MFN_RATE", "PREF_RATE"])
         + _pth("Utilization", ["PREF_STATUS", "CUSVAL"])
-        + _pth("Unclaimed Savings", ["CUSVAL", "MFN_RATE", "PREF_RATE"]) +
-        '</tr></thead>'
-        f'<tbody>{lane_rows}</tbody>'
-        '</table></div></div>'
+        + _pth("Unclaimed Savings", ["CUSVAL", "MFN_RATE", "PREF_RATE"])
+        + '</tr></thead>'
     )
 
-    # ── Shipment eligibility feed (PREF_STATUS=U only) ───────────────────
+    # â”€â”€ Dashboard-level shipment status filter â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    filter_bar = (
+        '<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;'
+        'padding:11px 18px;background:#f8f6fc;border-radius:8px;'
+        'border:1px solid #ede8f8">'
+        '<span style="font-size:0.72rem;font-weight:700;color:#1a0533;'
+        'text-transform:uppercase;letter-spacing:0.8px;margin-right:4px">'
+        'Shipment view:</span>'
+        '<button id="ltog-all" onclick="switchLaneFilter(\'all\')" '
+        'style="padding:4px 14px;border-radius:12px;border:1px solid #A100FF;'
+        'background:#A100FF;color:#fff;font-size:0.75rem;font-weight:600;'
+        'cursor:pointer">All</button>'
+        '<button id="ltog-shipped" onclick="switchLaneFilter(\'shipped\')" '
+        'style="padding:4px 14px;border-radius:12px;border:1px solid #ddd;'
+        'background:#fff;color:#555;font-size:0.75rem;font-weight:600;'
+        'cursor:pointer">Shipped / Delivered</button>'
+        '<button id="ltog-intransit" onclick="switchLaneFilter(\'intransit\')" '
+        'style="padding:4px 14px;border-radius:12px;border:1px solid #ddd;'
+        'background:#fff;color:#555;font-size:0.75rem;font-weight:600;'
+        'cursor:pointer">In-Transit</button>'
+        '<span id="lane-status-note" style="font-size:0.72rem;color:#888;'
+        'margin-left:6px"></span>'
+        '</div>'
+    )
+
+    lane_section = (
+        '<div class="section-card" style="display:flex;flex-direction:column;height:420px">'
+        f'<div class="section-card-header">\U0001f310 FTA Lane Utilization Gap'
+        f'<span style="font-size:0.72rem;font-weight:400;color:#888;'
+        f'margin-left:10px;letter-spacing:0">({period_label})</span>'
+        f'{_sap_badge("SAP TM + GTS")}</div>'
+        '<div style="overflow-x:auto;overflow-y:auto;flex:1">'
+        '<table style="width:100%;border-collapse:collapse">'
+        + _lane_thead
+        + f'<tbody id="lane-tbody-all">{_tbody_all}</tbody>'
+        + f'<tbody id="lane-tbody-shipped" style="display:none">{_tbody_shipped}</tbody>'
+        + f'<tbody id="lane-tbody-intransit" style="display:none">{_tbody_intransit}</tbody>'
+        + '</table></div></div>'
+    )
+
+    # â”€â”€ Merged Shipment + RoO table (replaces both original tables) â”€â”€â”€â”€â”€â”€â”€â”€â”€
     roo_badge_styles = {
         "Q": "background:#e6fff9;color:#12B3A3",
         "M": "background:#fff3cd;color:#856404",
         "F": "background:#fde8e8;color:#c0392b",
     }
-    unclaimed     = [s for s in shipments if s["claimed_status"] == "U"]
-    shipment_rows = ""
+
+    # Build RoO lookup keyed by (product, hs_code, fta_name)
+    _roo_lut: dict = {}
+    if isinstance(roo_items, list):
+        for _r in roo_items:
+            _roo_lut[(_r["product"], _r["hs_code"], _r["fta_name"])] = _r
+
+    unclaimed    = [s for s in shipments if s["claimed_status"] == "U"]
+    merged_rows  = ""
     if not unclaimed:
         if _is_empty:
-            _shp_empty = '\U0001f4c2 No shipment data — upload a file above'
+            _m_empty = '\U0001f4c2 No shipment data &mdash; upload a file above'
         elif _no_industry_match:
-            _shp_empty = f'No {ind_label} unclaimed shipments in your uploaded data'
+            _m_empty = f'No {ind_label} unclaimed shipments in your uploaded data'
         else:
-            _shp_empty = '✓ No eligible-unclaimed shipments in the uploaded data'
-        shipment_rows = (
-            '<tr><td colspan="8" style="padding:32px;text-align:center;'
-            f'color:#999;font-size:0.85rem">{_shp_empty}</td></tr>'
+            _m_empty = 'âœ“ No eligible-unclaimed shipments in the uploaded data'
+        merged_rows = (
+            '<tr><td colspan="17" style="padding:32px;text-align:center;'
+            f'color:#999;font-size:0.85rem">{_m_empty}</td></tr>'
         )
+
     for s in unclaimed:
         roo_code  = s["roo_status"]
-        roo_label = ROO_STATUS_LABELS.get(roo_code) or "—"
+        roo_label = ROO_STATUS_LABELS.get(roo_code) or "&mdash;"
         row_bg    = "background:#fff8e6;" if roo_code == "M" else ""
         ro_badge  = roo_badge_styles.get(roo_code, "color:#999;background:#f0f0f0")
         tor_id    = s["shipment_id"]
         saving_k  = s.get("est_saving_k") or 0.0
+        _sst      = str(s.get("shipment_status", "")).strip().upper()
+        _cleared  = _sst in {"DELIVERED", "SHIPPED"}
+        _transit  = _sst in {"IN-TRANSIT", "IN_TRANSIT", "INTRANSIT", "IN TRANSIT"}
+        if _cleared:
+            _final_k     = round(saving_k * 0.92, 1)
+            _gap_k       = round(saving_k - _final_k, 1)
+            _final_html  = f'<span style="color:#A100FF;font-weight:600">${_final_k}K</span>'
+            _savgap_html = f'<span style="color:#c0392b;font-weight:600">${_gap_k}K</span>'
+        elif _transit:
+            _final_html   = '<span style="color:#bbb">&mdash;</span>'
+            _savgap_html  = '<span style="color:#bbb">&mdash;</span>'
+        else:
+            _final_html   = '<span style="color:#bbb">&mdash;</span>'
+            _savgap_html  = '<span style="color:#bbb">&mdash;</span>'
         origin_n  = _ctry(s["origin"])
         dest_n    = _ctry(s["destination"])
         entry_d   = _dats_display(s["entry_date"])
-        shipment_rows += (
+        s_cat     = s.get("product_category") or "&mdash;"
+
+        # Merge in RoO assessment data for this product/lane
+        _rk  = (s["product"], s["hs_code"], s["fta_name"])
+        _rd  = _roo_lut.get(_rk)
+        if _rd:
+            _roo_test = _rd.get("roo_test_type", "&mdash;")
+            _rvc      = _rd.get("rvc_pct")
+            _thr      = _rd.get("roo_threshold_pct")
+            _rvc_cell = f'{_rvc}% / {_thr}%' if _rvc is not None and _thr is not None else "&mdash;"
+            _gap      = _rd.get("gap_pct", 0)
+            _gap_html = (
+                f'<span style="color:#c0392b;font-weight:600">âˆ’{_gap} pts</span>'
+                if _gap > 0 else
+                '<span style="color:#12B3A3;font-weight:600">&mdash;</span>'
+            )
+            _note         = _rd.get("compliance_note", "")
+            _note_escaped = _note.replace("&", "&amp;").replace('"', "&quot;")
+        else:
+            _roo_test = _rvc_cell = "&mdash;"
+            _gap_html = "&mdash;"
+            _note = _note_escaped = ""
+
+        merged_rows += (
             f'<tr style="{row_bg}cursor:pointer;border-bottom:1px solid #f5f3fa" '
             f"onclick=\"fetchFTAExplain(this, '{tor_id}')\" "
             f'data-shipment-id="{tor_id}" '
+            f'data-shipment-status="{_sst}" '
             f'data-product="{s["product"]}" '
             f'data-hs-code="{s["hs_code"]}" '
             f'data-origin="{origin_n}" '
@@ -3385,59 +3630,80 @@ def agent_fta_preferential():
             f'data-est-saving-k="{saving_k}" '
             f'data-ro-status="{roo_label}" '
             f'data-rvc-pct="{s["rvc_pct"] if s["rvc_pct"] is not None else 0}" '
-            f'data-rvc-threshold="{s["roo_threshold_pct"] if s["roo_threshold_pct"] is not None else 0}">'
-            f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600">{tor_id}</td>'
-            f'<td style="padding:10px 12px;font-size:0.78rem;color:#666;'
-            f'font-family:monospace">{entry_d}</td>'
+            f'data-rvc-threshold="{s["roo_threshold_pct"] if s["roo_threshold_pct"] is not None else 0}" '
+            f'data-compliance-note="{_note_escaped}">'
+            # Shipment columns
+            f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;white-space:nowrap">{tor_id}</td>'
+            f'<td style="padding:10px 12px;font-size:0.78rem;color:#666;font-family:monospace;white-space:nowrap">{entry_d}</td>'
+            f'<td style="padding:10px 12px;font-size:0.78rem;color:#555">{s_cat}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem">{s["product"]}</td>'
-            f'<td style="padding:10px 12px;font-size:0.82rem;font-family:monospace">'
-            f'{s["hs_code"]}</td>'
-            f'<td style="padding:10px 12px;font-size:0.82rem">'
-            f'{origin_n} → {dest_n}</td>'
-            f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;'
-            f'color:#A100FF">${saving_k}K</td>'
+            f'<td style="padding:10px 12px;font-size:0.78rem;color:#555">{s.get("supplier_name") or "&mdash;"}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem;font-family:monospace">{s["hs_code"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem;white-space:nowrap">{origin_n} &rarr; {dest_n}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:#A100FF">{s["fta_name"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem;font-weight:600;color:#A100FF;white-space:nowrap">${saving_k}K</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem;white-space:nowrap">{_final_html}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem;white-space:nowrap">{_savgap_html}</td>'
+            # RoO assessment columns
+            f'<td style="padding:10px 12px;font-size:0.78rem;color:#555">{_roo_test}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem;text-align:center;white-space:nowrap">{_rvc_cell}</td>'
             f'<td style="padding:10px 12px">'
-            f'<span style="padding:2px 8px;border-radius:4px;font-size:0.72rem;'
-            f'font-weight:600;{ro_badge}">{roo_label}</span>'
-            f'<div style="font-size:0.65rem;color:#999;margin-top:3px">'
+            f'<span style="padding:2px 8px;border-radius:4px;font-size:0.72rem;font-weight:600;{ro_badge}">{roo_label}</span>'
             + (
-                f'RVC {s["rvc_pct"]}% / {s["roo_threshold_pct"]}% req\'d'
-                if s["rvc_pct"] is not None and s["roo_threshold_pct"] is not None
-                else "RVC data incomplete"
+                f'<div style="font-size:0.65rem;color:#999;margin-top:3px">'
+                + (f'RVC {s["rvc_pct"]}% / {s["roo_threshold_pct"]}% req\'d'
+                   if s["rvc_pct"] is not None and s["roo_threshold_pct"] is not None
+                   else "RVC data incomplete")
+                + '</div>'
             ) +
-            '</div></td>'
-            f'<td style="padding:10px 12px;font-size:0.78rem;color:#A100FF;'
-            f'font-weight:600">▶ Explain</td>'
+            f'</td>'
+            f'<td style="padding:10px 12px;text-align:center">{_gap_html}</td>'
+            f'<td style="padding:10px 12px;font-size:0.75rem;color:#666;max-width:180px">{_note}</td>'
+            f'<td style="padding:10px 12px;font-size:0.78rem;color:#A100FF;font-weight:600;white-space:nowrap">â–¶ Explain</td>'
             '</tr>'
         )
 
-    shipment_section = (
+    merged_section = (
         '<div class="section-card">'
         '<div class="section-card-header">'
-        f'\U0001f4e6 Shipment Eligibility Feed — Eligible / Unclaimed (PREF_STATUS=U)'
-        f'<span style="font-size:0.72rem;font-weight:400;color:#888;'
-        f'margin-left:10px;letter-spacing:0">({period_label})</span>'
+        '\U0001f4cb Shipment Eligibility &amp; RoO Assessment &mdash; Unclaimed (PREF_STATUS=U)'
+        f'<span style="font-size:0.72rem;font-weight:400;color:#888;margin-left:10px;letter-spacing:0">({period_label})</span>'
         f'{_sap_badge("SAP TM + GTS")}</div>'
-        '<div style="overflow-x:auto">'
+        '<div style="overflow-x:auto;max-height:420px;overflow-y:auto">'
         '<table style="width:100%;border-collapse:collapse">'
-        '<thead><tr>'
+        '<thead><tr style="position:sticky;top:0;z-index:2;background:#fff">'
         + _pth("Freight Order", ["TOR_ID"])
         + _pth("Entry Date", ["ENTRY_DATE"])
+        + _pth("Category", ["PRODUCT_CATEGORY"])
         + _pth("Product", ["PRODUCT_TEXT"])
+        + _pth("Supplier", ["SUPPLIER_NAME"])
         + _pth("HS Code", ["CCNGN"])
         + _pth("Lane", ["CTYDP", "CTYAR"])
+        + _pth("Agreement", ["AGREEMENT"])
         + _pth("Est. Saving", ["CUSVAL", "MFN_RATE", "PREF_RATE"])
+        + (f'<th {th}><div style="display:flex;align-items:center;gap:4px">'
+           f'Final Saving'
+           f'<button onclick="openIllustrativeInfo()" '
+           f'style="width:8px;height:8px;border-radius:50%;background:#888;'
+           f'flex-shrink:0;cursor:pointer;border:none;padding:0;'
+           f'display:inline-block;vertical-align:middle" '
+           f'title="Illustrative figures &mdash; click for note"></button>'
+           f'</div></th>')
+        + _pth("Gap ($)", [])
+        + _pth("RoO Test", [])
+        + _pth("RVC Actual / Required", ["RVC_PCT", "RVC_THRESHOLD"])
         + _pth("RoO Status", ["ROO_STATUS"])
+        + _pth("Gap", ["RVC_PCT", "RVC_THRESHOLD"])
+        + _pth("Compliance Note", [])
         + _pth("Action", []) +
         '</tr></thead>'
-        f'<tbody>{shipment_rows}</tbody>'
+        f'<tbody id="merged-tbody">{merged_rows}</tbody>'
         '</table></div>'
-        '<div id="fta-ai-box" class="ai-summary" '
-        'style="display:none;margin:16px 20px"></div>'
+        '<div id="fta-ai-box" class="ai-summary" style="display:none;margin:16px 20px"></div>'
         '</div>'
     )
 
-    # ── CoO / Proof-of-Origin Tracker ───────────────────────────────────
+    # â”€â”€ CoO / Proof-of-Origin Tracker â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     coo_badge_styles = {
         "OVERDUE":   "background:#fde8e8;color:#c0392b",
         "PENDING":   "background:#fff8e6;color:#856404",
@@ -3449,24 +3715,26 @@ def agent_fta_preferential():
         _coo_empty = (
             f'No {ind_label} CoO requests in your uploaded data'
             if _no_industry_match else
-            '\U0001f4c2 No CoO data — upload a CoO requests file above'
+            '\U0001f4c2 No CoO data &mdash; upload a CoO requests file above'
         )
         coo_rows = (
-            '<tr><td colspan="4" style="padding:32px;text-align:center;'
+            '<tr><td colspan="6" style="padding:32px;text-align:center;'
             f'color:#999;font-size:0.85rem">{_coo_empty}</td></tr>'
         )
     for req in coo_requests:
         poo_s     = req["status"]
         poo_label = POO_STATUS_LABELS.get(poo_s, poo_s.title())
         badge     = coo_badge_styles.get(poo_s, "")
-        lane_disp = f'{_ctry(req["origin"])} → {_ctry(req["destination"])}'
+        lane_disp = f'{_ctry(req["origin"])} &rarr; {_ctry(req["destination"])}'
         deadline_d = _dats_display(req["deadline"])
         coo_rows += (
             '<tr style="border-bottom:1px solid #f5f3fa">'
             f'<td style="padding:10px 12px;font-size:0.82rem">{req["supplier_name"]}</td>'
             f'<td style="padding:10px 12px;font-size:0.82rem">{lane_disp}</td>'
-            f'<td style="padding:10px 12px;font-size:0.75rem;color:#555">'
-            f'{req["poo_type"]}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem;color:#555">'
+            f'{req.get("doc_type") or "&mdash;"}</td>'
+            f'<td style="padding:10px 12px;font-size:0.82rem;text-align:center">'
+            f'<span style="color:#bbb">&mdash;</span></td>'
             f'<td style="padding:10px 12px;font-size:0.82rem;font-family:monospace">'
             f'{deadline_d}</td>'
             f'<td style="padding:10px 12px">'
@@ -3476,24 +3744,33 @@ def agent_fta_preferential():
         )
 
     coo_section = (
-        '<div class="section-card">'
+        '<div class="section-card" style="display:flex;flex-direction:column;height:420px">'
         '<div class="section-card-header">\U0001f4cb CoO / Proof-of-Origin Tracker'
         '<span style="font-size:0.72rem;font-weight:400;color:#888;'
         'margin-left:10px;letter-spacing:0">Current Worklist</span>'
         f'{_sap_badge("SAP GTS")}</div>'
+        '<div style="overflow-x:auto;overflow-y:auto;flex:1">'
         '<table style="width:100%;border-collapse:collapse">'
         '<thead><tr>'
         + _pth("Supplier", ["SUPPLIER_NAME"])
         + _pth("Trade Lane", ["CTYDP", "CTYAR"])
-        + _pth("Doc Type", ["POO_TYPE"])
+        + _pth("DOC TYPE", [])
+        + (f'<th {th}><div style="display:flex;align-items:center;gap:4px">'
+           f'VALUE AT RISK'
+           f'<button onclick="openValueAtRiskInfo()" '
+           f'style="width:8px;height:8px;border-radius:50%;background:#888;'
+           f'flex-shrink:0;cursor:pointer;border:none;padding:0;'
+           f'display:inline-block;vertical-align:middle" '
+           f'title="What is Value at Risk?"></button>'
+           f'</div></th>')
         + _pth("Deadline", ["VDECL_DEADLINE"])
         + _pth("Status", ["POO_STATUS"]) +
         '</tr></thead>'
         f'<tbody>{coo_rows}</tbody>'
-        '</table></div>'
+        '</table></div></div>'
     )
 
-    # ── RoO Compliance Assessment (collapsible) ──────────────────────────
+    # â”€â”€ RoO Compliance Assessment (collapsible) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     roo_badge_styles_assess = {
         "Q": "background:#e6fff9;color:#12B3A3",
         "M": "background:#fff3cd;color:#856404",
@@ -3532,7 +3809,7 @@ def agent_fta_preferential():
             _roo_empty = (
                 f'No {ind_label} products in your uploaded data'
                 if _no_industry_match else
-                '✓ All assessed products are compliant — no gaps to report'
+                'âœ“ All assessed products are compliant &mdash; no gaps to report'
             )
             roo_rows = (
                 f'<tr><td colspan="8" style="padding:32px;text-align:center;'
@@ -3545,10 +3822,10 @@ def agent_fta_preferential():
                 roo_label = ROO_STATUS_LABELS.get(roo_code, roo_code)
                 badge     = roo_badge_styles_assess.get(roo_code, "")
             else:
-                roo_label = verdict if verdict else "—"
+                roo_label = verdict if verdict else "&mdash;"
                 badge     = "background:#f0f0f4;color:#52525B"
 
-            # RVC column — show value + source provenance
+            # RVC column &mdash; show value + source provenance
             _rvc     = p.get("rvc_pct")
             _thr     = p.get("roo_threshold_pct")
             _rvc_src = p.get("rvc_source", "")
@@ -3563,7 +3840,7 @@ def agent_fta_preferential():
                 )
                 _rvc_cell = f'{_rvc}%{_prov}'
             else:
-                _rvc_cell = "—"
+                _rvc_cell = "&mdash;"
             if _thr is not None:
                 _tprov = (
                     ' <span style="font-size:0.62rem;color:#888">(rule)</span>'
@@ -3571,12 +3848,12 @@ def agent_fta_preferential():
                 )
                 _thr_cell = f'{_thr}%{_tprov}'
             else:
-                _thr_cell = "—"
+                _thr_cell = "&mdash;"
 
             gap_cell = (
-                f'<span style="color:#c0392b;font-weight:600">−{p["gap_pct"]} pts</span>'
+                f'<span style="color:#c0392b;font-weight:600">âˆ’{p["gap_pct"]} pts</span>'
                 if p.get("gap_pct", 0) > 0 else
-                '<span style="color:#12B3A3;font-weight:600">—</span>'
+                '<span style="color:#12B3A3;font-weight:600">&mdash;</span>'
             )
             roo_rows += (
                 '<tr style="border-bottom:1px solid #f5f3fa">'
@@ -3594,7 +3871,7 @@ def agent_fta_preferential():
                 '</tr>'
             )
 
-        # Footer — describe active data sources
+        # Footer &mdash; describe active data sources
         _roo_src_parts: list[str] = []
         if source.get("bom_mode") == "uploaded":
             _roo_src_parts.append("RVC: uploaded BoM")
@@ -3602,7 +3879,7 @@ def agent_fta_preferential():
             _roo_src_parts.append("thresholds: uploaded RoO rules")
         if not _roo_src_parts:
             _roo_src_parts.append("RVC + thresholds: client-provided shipment columns")
-        _roo_footer_text = "  ·  ".join(_roo_src_parts)
+        _roo_footer_text = "  &middot;  ".join(_roo_src_parts)
 
         roo_body = (
             '<div style="overflow-x:auto;max-height:280px;overflow-y:auto">'
@@ -3626,29 +3903,17 @@ def agent_fta_preferential():
             '</div>'
         )
 
-    roo_section = (
-        '<details open style="margin-bottom:12px;border-radius:10px;'
-        'box-shadow:0 2px 8px rgba(26,5,51,0.07);background:#fff">'
-        '<summary style="padding:14px 20px;font-size:0.8rem;font-weight:700;'
-        'text-transform:uppercase;letter-spacing:1px;border-bottom:1px solid #f0eaf8;'
-        'display:flex;align-items:center;gap:8px;cursor:pointer;list-style:none;'
-        'user-select:none;color:#1a0533">'
-        '\U0001f4cb RoO / Preference Assessment'
-        f'{_sap_badge("SAP GTS")}'
-        '</summary>'
-        + roo_body + _roo_footer
-        + '</details>'
-    )
+    # roo_section removed &mdash; its data is now merged into merged_section above.
 
-    # ── Qualification Roadmap (collapsible) ──────────────────────────────
+    # â”€â”€ Qualification Roadmap (collapsible) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     roadmap_rows = ""
     if not roadmap:
         if _is_empty:
-            _rm_msg = '\U0001f4c2 No shipment data — qualification roadmap is generated from lane data'
+            _rm_msg = '\U0001f4c2 No shipment data &mdash; qualification roadmap is generated from lane data'
         elif _no_industry_match:
             _rm_msg = f'No {ind_label} lanes in your uploaded data'
         else:
-            _rm_msg = '✓ All lanes are at or above 75% utilization — no under-utilized lanes to action'
+            _rm_msg = 'âœ“ All lanes are at or above 75% utilization &mdash; no under-utilized lanes to action'
         roadmap_rows = (
             '<tr><td colspan="7" style="padding:32px;text-align:center;'
             f'color:#999;font-size:0.85rem">{_rm_msg}</td></tr>'
@@ -3657,8 +3922,8 @@ def agent_fta_preferential():
         effort_badge = effort_styles.get(item["effort"], "")
         _rm_sav = item["unclaimed_savings_k"]
         sc = "#c0392b" if (_rm_sav or 0) > 200 else "#1a0533"
-        _rm_sav_html = f'${_rm_sav}K' if _rm_sav is not None else '<span style="color:#bbb">—</span>'
-        _rm_lane_disp = f'{_ctry(item["origin"])} → {_ctry(item["destination"])}'
+        _rm_sav_html = f'${_rm_sav}K' if _rm_sav is not None else '<span style="color:#bbb">&mdash;</span>'
+        _rm_lane_disp = f'{_ctry(item["origin"])} &rarr; {_ctry(item["destination"])}'
         roadmap_rows += (
             '<tr style="border-bottom:1px solid #f5f3fa">'
             f'<td style="padding:10px 12px;font-size:0.82rem">{_rm_lane_disp}</td>'
@@ -3686,7 +3951,7 @@ def agent_fta_preferential():
         'text-transform:uppercase;letter-spacing:1px;border-bottom:1px solid #f0eaf8;'
         'display:flex;align-items:center;gap:8px;cursor:pointer;list-style:none;'
         'user-select:none;color:#1a0533">'
-        '\U0001f5fa Qualification Roadmap — Under-Utilised Lanes'
+        '\U0001f5fa Qualification Roadmap &mdash; Under-Utilised Lanes'
         f'{_sap_badge("SAP GTS")}'
         '</summary>'
         '<div style="overflow-x:auto;max-height:280px;overflow-y:auto">'
@@ -3703,13 +3968,14 @@ def agent_fta_preferential():
         f'<tbody>{roadmap_rows}</tbody>'
         '</table></div>'
         '<div style="padding:8px 16px;font-size:0.68rem;color:#bbb;border-top:1px solid #f0eaf8">'
-        'Opportunity figures sourced from FTA Lane Utilization Gap table — same formula. '
+        'Opportunity figures sourced from FTA Lane Utilization Gap table &mdash; same formula. '
         'Derived from uploaded shipment data.'
         + '</div>'
         '</details>'
     )
 
-    # ── SAP Provenance Modal (persistent panel, opened by dot buttons) ─────
+
+    # â”€â”€ SAP Provenance Modal (persistent panel, opened by dot buttons) â”€â”€â”€â”€â”€
     prov_modal_html = (
         '<div id="sap-prov-modal" '
         'style="display:none;position:fixed;inset:0;z-index:10000;'
@@ -3727,7 +3993,7 @@ def agent_fta_preferential():
         '</div></div>'
     )
 
-    # ── Column-mapping modal HTML ─────────────────────────────────────────
+    # â”€â”€ Column-mapping modal HTML â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     mapping_modal_html = (
         '<div id="fta-mapping-modal" '
         'style="display:none;position:fixed;inset:0;z-index:10001;'
@@ -3736,12 +4002,12 @@ def agent_fta_preferential():
         '<div style="background:#fff;border-radius:14px;max-width:740px;width:96%;'
         'box-shadow:0 16px 56px rgba(26,5,51,0.28);position:relative;'
         'max-height:90vh;display:flex;flex-direction:column">'
-        # ── Modal header ──
+        # â”€â”€ Modal header â”€â”€
         '<div style="padding:18px 24px 14px;border-bottom:1px solid #f0eaf8;'
         'display:flex;align-items:flex-start;gap:10px;flex-shrink:0">'
         '<div style="flex:1">'
         '<div style="font-size:0.95rem;font-weight:700;color:#1a0533">'
-        'Column Mapping — confirm before loading</div>'
+        'Column Mapping &mdash; confirm before loading</div>'
         '<div style="font-size:0.75rem;color:#888;margin-top:3px">'
         'Your file uses different column names. Map each field below, then click '
         '<strong>Apply &amp; Load</strong>.</div>'
@@ -3752,10 +4018,10 @@ def agent_fta_preferential():
         'display:flex;align-items:center;justify-content:center" '
         'title="Cancel (Esc)">&#x2715;</button>'
         '</div>'
-        # ── Modal body (populated by JS) ──
+        # â”€â”€ Modal body (populated by JS) â”€â”€
         '<div id="mapping-modal-body" '
         'style="padding:16px 24px;overflow-y:auto;flex:1"></div>'
-        # ── Modal footer ──
+        # â”€â”€ Modal footer â”€â”€
         '<div style="padding:14px 24px;border-top:1px solid #f0eaf8;'
         'display:flex;gap:10px;align-items:center;flex-shrink:0">'
         '<button id="apply-mapping-btn" onclick="applyMapping()" '
@@ -3771,23 +4037,68 @@ def agent_fta_preferential():
         '</div></div>'
     )
 
-    # ── Compose page ─────────────────────────────────────────────────────
+    # â”€â”€ Compose page â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     content = (
         header_html + upload_section + kpi_html
+        + filter_bar
         + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">'
         + lane_section
         + coo_section
         + '</div>'
-        + '<div style="margin-bottom:20px">' + shipment_section + '</div>'
-        + roo_section
+        + '<div style="margin-bottom:20px">' + merged_section + '</div>'
         + roadmap_section
         + prov_modal_html
         + mapping_modal_html
     )
 
-    # ── Scripts ──────────────────────────────────────────────────────────
+    # â”€â”€ Scripts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     scripts = """
 <script>
+// â”€â”€ Lane status toggle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function switchLaneFilter(bucket) {
+  var buckets = ['all', 'shipped', 'intransit'];
+  var notes = {
+    shipped:   'Already cleared &mdash; unclaimed savings on these were not captured.',
+    intransit: "Still capturable &mdash; these orders haven't cleared customs yet.",
+    all:       ''
+  };
+  buckets.forEach(function(b) {
+    var tbody = document.getElementById('lane-tbody-' + b);
+    var btn   = document.getElementById('ltog-' + b);
+    if (tbody) tbody.style.display = (b === bucket) ? '' : 'none';
+    if (btn) {
+      if (b === bucket) {
+        btn.style.background = '#A100FF';
+        btn.style.color = '#fff';
+        btn.style.borderColor = '#A100FF';
+      } else {
+        btn.style.background = '#fff';
+        btn.style.color = '#555';
+        btn.style.borderColor = '#ddd';
+      }
+    }
+  });
+  var note = document.getElementById('lane-status-note');
+  if (note) note.textContent = notes[bucket] || '';
+
+  // Also filter the merged shipment eligibility table
+  var mergedTbody = document.getElementById('merged-tbody');
+  if (mergedTbody) {
+    var rows = mergedTbody.querySelectorAll('tr[data-shipment-status]');
+    var inTransitVals = ['IN-TRANSIT', 'IN_TRANSIT', 'INTRANSIT', 'IN TRANSIT'];
+    rows.forEach(function(row) {
+      var st = (row.dataset.shipmentStatus || '').toUpperCase();
+      var show = true;
+      if (bucket === 'shipped') {
+        show = (st === 'DELIVERED' || st === 'SHIPPED');
+      } else if (bucket === 'intransit') {
+        show = inTransitVals.indexOf(st) >= 0;
+      }
+      row.style.display = show ? '' : 'none';
+    });
+  }
+}
+
 function fetchFTAExplain(row, shipmentId) {
     var box = document.getElementById('fta-ai-box');
     if (!box) return;
@@ -3803,13 +4114,14 @@ function fetchFTAExplain(row, shipmentId) {
         est_saving_k: parseFloat(row.dataset.estSavingK),
         ro_status:        row.dataset.roStatus,
         rvc_pct:          parseFloat(row.dataset.rvcPct),
-        rvc_threshold_pct: parseFloat(row.dataset.rvcThreshold)
+        rvc_threshold_pct: parseFloat(row.dataset.rvcThreshold),
+        compliance_note:  row.dataset.complianceNote || ''
     };
     box.style.display = 'flex';
     box.innerHTML = '<div class="ai-icon">\U0001f916</div><div>'
         + '<div class="ai-label">AI FTA Advisor</div>'
         + '<div class="ai-text"><span class="ai-loading">Analyzing '
-        + shipmentId + '…</span></div></div>';
+        + shipmentId + '&hellip;</span></div></div>';
     fetch('/api/fta/explain', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -3818,7 +4130,7 @@ function fetchFTAExplain(row, shipmentId) {
     .then(function(r) { return r.json(); })
     .then(function(data) {
         box.innerHTML = '<div class="ai-icon">\U0001f916</div><div>'
-            + '<div class="ai-label">AI FTA Analysis — ' + shipmentId + '</div>'
+            + '<div class="ai-label">AI FTA Analysis &mdash; ' + shipmentId + '</div>'
             + '<div class="ai-text">'
             + data.explanation.replace(/\\n/g, '<br>') + '</div></div>';
         box.scrollIntoView({behavior: 'smooth', block: 'nearest'});
@@ -3826,7 +4138,7 @@ function fetchFTAExplain(row, shipmentId) {
     .catch(function() {
         box.innerHTML = '<div class="ai-icon">\U0001f916</div><div>'
             + '<div class="ai-label">AI FTA Advisor</div>'
-            + '<div class="ai-text">Analysis unavailable — please try again.'
+            + '<div class="ai-text">Analysis unavailable &mdash; please try again.'
             + '</div></div>';
     });
 }
@@ -3869,7 +4181,7 @@ function fetchFTAExplain(row, shipmentId) {
   setInterval(loadTariffFeed, 10000);
 })();
 
-// ── SAP Provenance Panel ─────────────────────────────────────────────────
+// â”€â”€ SAP Provenance Panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function openSapProv(btn) {
     var colLabel = btn.dataset.colLabel;
     var provCode = btn.dataset.provCode;
@@ -3879,17 +4191,17 @@ function openSapProv(btn) {
 
     var overallGreen = provCode === 'green';
     var dotColor  = overallGreen ? '#12B3A3' : '#F5A623';
-    var provLabel = overallGreen ? '🟢 Verified SAP field' : '🟡 Pending SAP confirmation';
+    var provLabel = overallGreen ? 'ðŸŸ¢ Verified SAP field' : 'ðŸŸ¡ Pending SAP confirmation';
     var provBg    = overallGreen ? '#e6fff9' : '#fff8e6';
     var provFg    = overallGreen ? '#0a7060' : '#856404';
 
     // Build SAP name list and deduplicate source systems
-    var sapNames = fields.map(function(f){ return f.sap; }).join(' · ');
+    var sapNames = fields.map(function(f){ return f.sap; }).join(' &middot; ');
     var srcMap = {}; fields.forEach(function(f){ srcMap[f.src] = 1; });
     var srcSystems = Object.keys(srcMap).join(' + ');
 
     var html = '';
-    // ── Panel header ──────────────────────────────────────────────────────
+    // â”€â”€ Panel header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     html += '<div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:18px">';
     html += '<span style="width:15px;height:15px;border-radius:50%;background:' + dotColor +
             ';display:inline-block;flex-shrink:0;margin-top:4px"></span>';
@@ -3906,7 +4218,7 @@ function openSapProv(btn) {
             'padding:3px 10px;border-radius:5px">' + srcSystems + '</span>';
     html += '</div></div></div>';
 
-    // ── Field descriptions ────────────────────────────────────────────────
+    // â”€â”€ Field descriptions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (fields.length === 1) {
         var f = fields[0];
         html += '<p style="font-size:0.86rem;color:#2d2d3a;line-height:1.72;margin:0 0 16px;' +
@@ -3923,7 +4235,7 @@ function openSapProv(btn) {
             var fDot = fg ? '#12B3A3' : '#F5A623';
             var fBg  = fg ? '#e6fff9' : '#fff8e6';
             var fFg  = fg ? '#0a7060' : '#856404';
-            var fPL  = fg ? '🟢 Verified' : '🟡 Pending confirmation';
+            var fPL  = fg ? 'ðŸŸ¢ Verified' : 'ðŸŸ¡ Pending confirmation';
             html += '<div style="border-top:1px solid #f0eaf8;padding-top:14px;' +
                     'margin-top:' + (i === 0 ? '0' : '14px') + '">';
             html += '<div style="display:flex;align-items:center;gap:7px;margin-bottom:8px">';
@@ -3959,11 +4271,37 @@ function closeSapProv() {
     document.body.style.overflow = '';
 }
 
+function openValueAtRiskInfo() {
+    var html = '<div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:18px">';
+    html += '<span style="width:15px;height:15px;border-radius:50%;background:#888;display:inline-block;flex-shrink:0;margin-top:4px"></span>';
+    html += '<div style="flex:1"><div style="font-size:1.05rem;font-weight:700;color:#1a0533;margin-bottom:9px">Value at Risk</div>';
+    html += '<span style="font-size:0.72rem;font-weight:700;background:#f5f5fa;color:#666;padding:3px 10px;border-radius:5px">Calculation coming soon</span>';
+    html += '</div></div>';
+    html += '<p style="font-size:0.86rem;color:#2d2d3a;line-height:1.72;margin:0;border-top:1px solid #f0eaf8;padding-top:16px">Value at Risk &mdash; the dollar amount of duty savings that would be lost if this Certificate of Origin is not secured before the shipment clears. (Calculation coming soon.)</p>';
+    var content = document.getElementById('sap-prov-content');
+    var modal   = document.getElementById('sap-prov-modal');
+    if (content) content.innerHTML = html;
+    if (modal)   modal.style.display = 'flex';
+}
+
+function openIllustrativeInfo() {
+    var html = '<div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:18px">';
+    html += '<span style="width:15px;height:15px;border-radius:50%;background:#888;display:inline-block;flex-shrink:0;margin-top:4px"></span>';
+    html += '<div style="flex:1"><div style="font-size:1.05rem;font-weight:700;color:#1a0533;margin-bottom:9px">Final Saving &amp; Gap &#8212; Illustrative Figures</div>';
+    html += '<span style="font-size:0.72rem;font-weight:700;background:#fff8e6;color:#856404;padding:3px 10px;border-radius:5px">Demo only</span>';
+    html += '</div></div>';
+    html += '<p style="font-size:0.86rem;color:#2d2d3a;line-height:1.72;margin:0;border-top:1px solid #f0eaf8;padding-top:16px">Final savings and gap are illustrative for demonstration purposes. They are estimated as approximately 92% / 8% of the calculated duty saving. Actual final savings depend on customs settlement data not yet integrated.</p>';
+    var content = document.getElementById('sap-prov-content');
+    var modal   = document.getElementById('sap-prov-modal');
+    if (content) content.innerHTML = html;
+    if (modal)   modal.style.display = 'flex';
+}
+
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') { closeSapProv(); closeMappingModal(); }
 });
 
-// ── FTA Column-Mapping Upload Flow ──────────────────────────────────────────
+// â”€â”€ FTA Column-Mapping Upload Flow â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function ftaUploadShipments(event) {
     event.preventDefault();
@@ -3976,7 +4314,7 @@ function ftaUploadShipments(event) {
     }
 
     var origText = btn ? btn.textContent : 'Upload';
-    if (btn) { btn.textContent = 'Uploading…'; btn.disabled = true; }
+    if (btn) { btn.textContent = 'Uploading&hellip;'; btn.disabled = true; }
 
     var fd = new FormData();
     fd.append('shipment_file', fileInput.files[0]);
@@ -4027,8 +4365,8 @@ function showMappingModal(data) {
     // File badge
     html += '<div style="font-size:0.74rem;color:#555;margin-bottom:14px;'
           + 'padding:7px 12px;background:#f8f6fc;border-radius:6px">'
-          + '📄 <strong>' + escH(data.filename) + '</strong>'
-          + ' &nbsp;·&nbsp; ' + (data.columns || []).length + ' columns detected'
+          + 'ðŸ“„ <strong>' + escH(data.filename) + '</strong>'
+          + ' &nbsp;&middot;&nbsp; ' + (data.columns || []).length + ' columns detected'
           + '</div>';
 
     // Section A: Suggested mappings
@@ -4052,7 +4390,7 @@ function showMappingModal(data) {
             html += '<div style="margin-bottom:18px">'
                   + '<div style="font-size:0.74rem;font-weight:700;color:#c0392b;'
                   + 'display:flex;align-items:center;gap:6px;margin-bottom:6px">'
-                  + '<span style="font-size:1rem">⚠️</span>'
+                  + '<span style="font-size:1rem">âš ï¸</span>'
                   + ' Unmapped Required Fields (' + unmappedReq.length + ')'
                   + ' &mdash; assign a column or the upload will fail'
                   + '</div>'
@@ -4063,7 +4401,7 @@ function showMappingModal(data) {
             html += '<div style="margin-bottom:18px">'
                   + '<div style="font-size:0.74rem;font-weight:700;color:#888;'
                   + 'display:flex;align-items:center;gap:6px;margin-bottom:6px">'
-                  + '<span style="font-size:0.85rem">ℹ️</span>'
+                  + '<span style="font-size:0.85rem">â„¹ï¸</span>'
                   + ' Unmapped Optional Fields (' + unmappedOpt.length + ')'
                   + ' &mdash; those dashboard sections will be disabled'
                   + '</div>'
@@ -4076,7 +4414,7 @@ function showMappingModal(data) {
     if (unused.length > 0) {
         html += '<div style="margin-bottom:4px">'
               + '<div style="font-size:0.72rem;font-weight:700;color:#aaa;margin-bottom:5px">'
-              + '🗂️ Unused columns in your file</div>'
+              + 'ðŸ—‚ï¸ Unused columns in your file</div>'
               + '<div style="display:flex;flex-wrap:wrap;gap:5px">';
         unused.forEach(function(c) {
             html += '<span style="background:#f5f5f5;color:#888;padding:2px 8px;'
@@ -4106,7 +4444,7 @@ function buildMappingTable(sapFields, data, optionalSet) {
         var warn    = (data.sanity_warnings || {})[sap] || '';
 
         // Dropdown options with suggested col pre-selected
-        var opts = '<option value="">— none —</option>'
+        var opts = '<option value="">&mdash; none &mdash;</option>'
                  + (data.columns || []).map(function(c) {
                      var sel = (c === sugCol) ? ' selected' : '';
                      return '<option value="' + escAttr(c) + '"' + sel + '>'
@@ -4116,7 +4454,7 @@ function buildMappingTable(sapFields, data, optionalSet) {
         // Sample values for the currently suggested column
         var sampleVals = sugCol && data.samples && data.samples[sugCol]
             ? data.samples[sugCol].slice(0, 3).join(', ')
-            : '—';
+            : '&mdash;';
 
         return '<tr style="border-bottom:1px solid #faf6ff">'
              // SAP field name
@@ -4137,7 +4475,7 @@ function buildMappingTable(sapFields, data, optionalSet) {
              + 'style="font-size:0.74rem;padding:3px 6px;border:1px solid #ddd;'
              + 'border-radius:4px;max-width:170px;cursor:pointer;width:100%">'
              + opts + '</select>'
-             + (warn ? '<div style="font-size:0.64rem;color:#F5A623;margin-top:3px">⚠ ' + escH(warn) + '</div>' : '')
+             + (warn ? '<div style="font-size:0.64rem;color:#F5A623;margin-top:3px">âš  ' + escH(warn) + '</div>' : '')
              + '</td>'
              // Sample values (updates on dropdown change)
              + '<td style="padding:7px 8px;vertical-align:top;max-width:140px">'
@@ -4170,7 +4508,7 @@ function onMappingChange(sel, sapField) {
     if (sp && data) {
         var vals = col && data.samples && data.samples[col]
             ? data.samples[col].slice(0, 3).join(', ')
-            : '—';
+            : '&mdash;';
         sp.textContent = vals;
     }
 }
@@ -4189,8 +4527,8 @@ function applyMapping() {
         mapping[sap] = (sel && sel.value) ? sel.value : null;
     });
 
-    if (btn) { btn.disabled = true; btn.textContent = 'Applying…'; }
-    if (statusEl) statusEl.textContent = 'Processing your data…';
+    if (btn) { btn.disabled = true; btn.textContent = 'Applying&hellip;'; }
+    if (statusEl) statusEl.textContent = 'Processing your data&hellip;';
 
     fetch('/api/fta/upload/apply-mapping', {
         method:  'POST',
@@ -4200,18 +4538,18 @@ function applyMapping() {
     .then(function(r) { return r.json(); })
     .then(function(result) {
         if (result.ok) {
-            if (statusEl) statusEl.textContent = '✓ Success! Loading dashboard…';
+            if (statusEl) statusEl.textContent = 'âœ“ Success! Loading dashboard&hellip;';
             setTimeout(function() { window.location.reload(); }, 350);
         } else {
             if (btn) { btn.disabled = false; btn.textContent = 'Apply & Load'; }
             var msg = (result.errors || []).join(' | ') || 'Mapping failed.';
-            if (statusEl) statusEl.textContent = '✗ ' + msg;
+            if (statusEl) statusEl.textContent = 'âœ— ' + msg;
             if (statusEl) statusEl.style.color = '#c0392b';
         }
     })
     .catch(function(e) {
         if (btn) { btn.disabled = false; btn.textContent = 'Apply & Load'; }
-        if (statusEl) statusEl.textContent = '✗ Request failed: ' + e.message;
+        if (statusEl) statusEl.textContent = 'âœ— Request failed: ' + e.message;
         if (statusEl) statusEl.style.color = '#c0392b';
     });
 }
@@ -4232,7 +4570,7 @@ function escAttr(s) { return escH(s); }
 </script>
 """
 
-    # ── Server-side ticker pre-render (bypasses any client-side fetch issues) ──
+    # â”€â”€ Server-side ticker pre-render (bypasses any client-side fetch issues) â”€â”€
     _ticker_init = ''
     try:
         _t_raw = _aggregator.recent_raw(_agg_max_entries) if _aggregator is not None else []
@@ -4256,7 +4594,7 @@ function escAttr(s) { return escH(s); }
             _single = ''.join(_t_parts)
             _ticker_init = _single + _single  # doubled for seamless CSS animation loop
     except Exception:
-        pass  # feed unavailable — ticker shows "Loading..." default
+        pass  # feed unavailable &mdash; ticker shows "Loading..." default
 
     _extra_kw = {"ticker_initial": _ticker_init} if _ticker_init else {}
     return render_template_string(
@@ -4268,8 +4606,99 @@ function escAttr(s) { return escH(s); }
         scripts=scripts,
         industry=industry,
         all_industries=get_industries(),
+        topbar_extras=topbar_extras,
         **_extra_kw,
     )
+
+
+# ---------------------------------------------------------------------------
+# FTA sub-agent placeholder pages
+# ---------------------------------------------------------------------------
+
+_FTA_SUB_PAGES = {
+    "fta_hs_review": {
+        "route":   "/agent/fta/hs-code-review",
+        "title":   "HS Code Review",
+        "icon":    "\U0001f3f7",
+        "desc":    "AI-assisted review of HS classifications — flags questionable codes and "
+                   "suggests lower-duty, legally-defensible alternatives across the shipment portfolio.",
+        "active":  "fta_hs_review",
+    },
+    "fta_risk_flags": {
+        "route":   "/agent/fta/risk-flags",
+        "title":   "Risk Flags (AI)",
+        "icon":    "\U0001f6a9",
+        "desc":    "AI-driven risk scoring on suppliers and CoOs to prioritize the analyst worklist "
+                   "and surface high-risk documents and counterparties.",
+        "active":  "fta_risk_flags",
+    },
+    "fta_coo_valid": {
+        "route":   "/agent/fta/coo-validation",
+        "title":   "CoO Validation (Supporting Proof)",
+        "icon":    "\U0001f4cb",
+        "desc":    "Validates each Certificate of Origin against supporting evidence (invoices, BoM, "
+                   "supplier declarations) — confirming claims are audit-defensible, not just received.",
+        "active":  "fta_coo_valid",
+    },
+    "fta_sourcing": {
+        "route":   "/agent/fta/sourcing",
+        "title":   "Sourcing Opportunities",
+        "icon":    "\U0001f504",
+        "desc":    "Identifies where re-sourcing a component or supplier would unlock FTA eligibility "
+                   "or lower duty — turning analysis into actionable sourcing recommendations.",
+        "active":  "fta_sourcing",
+    },
+}
+
+
+def _fta_sub_page(page_key: str):
+    p = _FTA_SUB_PAGES[page_key]
+    industry = _current_industry()
+    body = f"""
+    <div style="max-width:600px;margin:60px auto;text-align:center;padding:0 24px">
+      <div style="font-size:3rem;margin-bottom:16px">{p['icon']}</div>
+      <h2 style="font-size:1.3rem;font-weight:700;color:#1a0533;margin-bottom:10px">{p['title']}</h2>
+      <p style="font-size:0.86rem;color:#555;line-height:1.7;margin-bottom:28px">{p['desc']}</p>
+      <div style="display:inline-block;background:#f8f6fc;border:1px solid #ede8f8;
+                  border-radius:8px;padding:14px 28px">
+        <span style="font-size:0.72rem;font-weight:700;text-transform:uppercase;
+                     letter-spacing:1px;color:#A100FF">Coming soon</span>
+        <p style="font-size:0.78rem;color:#888;margin:6px 0 0">
+          This capability is on the roadmap and will be activated in a future release.
+        </p>
+      </div>
+    </div>
+    """
+    return render_template_string(
+        BASE,
+        title=p["title"],
+        css=_CSS,
+        sidebar=_sidebar_html(p["active"]),
+        content=body,
+        scripts="",
+        industry=industry,
+        all_industries=get_industries(),
+    )
+
+
+@app.route("/agent/fta/hs-code-review")
+def agent_fta_hs_review():
+    return _fta_sub_page("fta_hs_review")
+
+
+@app.route("/agent/fta/risk-flags")
+def agent_fta_risk_flags():
+    return _fta_sub_page("fta_risk_flags")
+
+
+@app.route("/agent/fta/coo-validation")
+def agent_fta_coo_valid():
+    return _fta_sub_page("fta_coo_valid")
+
+
+@app.route("/agent/fta/sourcing")
+def agent_fta_sourcing():
+    return _fta_sub_page("fta_sourcing")
 
 
 # ---------------------------------------------------------------------------
@@ -4286,7 +4715,7 @@ def agent_detail(agent_id):
     color = agent["cluster_color"]
 
     header_html = f"""
-    <a href="/" class="back-link">← Control Tower</a>
+    <a href="/" class="back-link">â† Control Tower</a>
     <div class="agent-detail-header"
          style="background: linear-gradient(135deg, #1a0533 0%, {color}88 100%);">
       <div style="font-size:2.4rem">{agent['icon']}</div>
@@ -4304,7 +4733,7 @@ def agent_detail(agent_id):
     if agent["status"] == "coming_soon":
         body_html = f"""
         <div class="coming-soon-box">
-          <div class="cs-icon">🚧</div>
+          <div class="cs-icon">ðŸš§</div>
           <h2>This agent is coming soon</h2>
           <p>{agent['display_name']} is under development and will appear here
              fully operational once activated.</p>
@@ -4323,7 +4752,7 @@ def agent_detail(agent_id):
         if _tariff_shock_agent is None:
             body_html = """
             <div class="coming-soon-box">
-              <div class="cs-icon">⚡</div>
+              <div class="cs-icon">âš¡</div>
               <h2>Tariff Shock Agent &mdash; Inactive</h2>
               <p>Set <code>tariff_shock.enabled: true</code> in
                  <strong>config.yaml</strong> and restart the app to activate
@@ -4335,7 +4764,7 @@ def agent_detail(agent_id):
             body_html = """
             <div class="section-card" style="margin-bottom:20px;border-top:3px solid #12B3A3;">
               <div class="section-card-header" style="color:#12B3A3;">
-                ⚡ Exposure Quantification &mdash; Step 2 (Live)
+                âš¡ Exposure Quantification &mdash; Step 2 (Live)
               </div>
               <div style="padding:14px 20px;font-size:0.78rem;color:#666;
                           border-bottom:1px solid #f0eaf8;">
@@ -4355,7 +4784,7 @@ def agent_detail(agent_id):
 
             <div class="section-card">
               <div class="section-card-header">
-                📊 Per-Lane Exposure Report
+                ðŸ“Š Per-Lane Exposure Report
               </div>
               <div id="ts-report-container" style="padding:12px 20px;">
                 <em style="color:#aaa;font-size:0.82rem;">
@@ -4366,7 +4795,7 @@ def agent_detail(agent_id):
 
             <div class="section-card" style="opacity:0.55;">
               <div class="section-card-header">
-                🔮 Step 1 &mdash; NLP Signal Ingestion <span style="font-weight:400;color:#aaa;">(stub)</span>
+                ðŸ”® Step 1 &mdash; NLP Signal Ingestion <span style="font-weight:400;color:#aaa;">(stub)</span>
               </div>
               <div style="padding:20px;color:#aaa;font-size:0.82rem;">
                 TODO: parse news/policy signals to anticipate rate changes before
@@ -4375,7 +4804,7 @@ def agent_detail(agent_id):
             </div>
             <div class="section-card" style="opacity:0.55;">
               <div class="section-card-header">
-                🌏 Step 3 &mdash; Sourcing / China+1 Modelling <span style="font-weight:400;color:#aaa;">(stub)</span>
+                ðŸŒ Step 3 &mdash; Sourcing / China+1 Modelling <span style="font-weight:400;color:#aaa;">(stub)</span>
               </div>
               <div style="padding:20px;color:#aaa;font-size:0.82rem;">
                 TODO: propose alternative origin countries for high-exposure lanes.
@@ -4383,7 +4812,7 @@ def agent_detail(agent_id):
             </div>
             <div class="section-card" style="opacity:0.55;">
               <div class="section-card-header">
-                📋 Step 4 &mdash; Playbooks / Filings <span style="font-weight:400;color:#aaa;">(stub)</span>
+                ðŸ“‹ Step 4 &mdash; Playbooks / Filings <span style="font-weight:400;color:#aaa;">(stub)</span>
               </div>
               <div style="padding:20px;color:#aaa;font-size:0.82rem;">
                 TODO: generate binding rulings, FTA cert renewals, duty-relief petitions.
@@ -4397,7 +4826,7 @@ def agent_detail(agent_id):
                 var c = document.getElementById('ts-alerts-container');
                 if (!c) return;
                 if (!alerts || alerts.length === 0) {
-                  c.innerHTML = '<em style="color:#aaa;font-size:0.82rem;">No alerts yet — waiting for rate-change events.</em>';
+                  c.innerHTML = '<em style="color:#aaa;font-size:0.82rem;">No alerts yet &mdash; waiting for rate-change events.</em>';
                   return;
                 }
                 var html = '';
@@ -4438,14 +4867,14 @@ def agent_detail(agent_id):
                     : (r.exposure_amount !== null
                         ? '<span style="color:' + dirColor + ';font-weight:600;">$'
                           + (r.exposure_amount / 1000).toFixed(0) + 'K</span>'
-                        : '—');
+                        : '&mdash;');
                   var delta = r.delta_pct !== null
                     ? (r.delta_pct > 0 ? '+' : '') + r.delta_pct.toFixed(2)
-                    : '—';
+                    : '&mdash;';
                   html += '<tr style="border-top:1px solid #f0eaf8;">'
                     + '<td style="padding:8px;">' + r.hs6 + ' ' + r.origin + '->' + r.destination + '</td>'
-                    + '<td style="padding:8px;text-align:right;">' + (r.old_effective_rate !== null ? r.old_effective_rate.toFixed(2) + '%' : '—') + '</td>'
-                    + '<td style="padding:8px;text-align:right;">' + (r.new_effective_rate !== null ? r.new_effective_rate.toFixed(2) + '%' : '—') + '</td>'
+                    + '<td style="padding:8px;text-align:right;">' + (r.old_effective_rate !== null ? r.old_effective_rate.toFixed(2) + '%' : '&mdash;') + '</td>'
+                    + '<td style="padding:8px;text-align:right;">' + (r.new_effective_rate !== null ? r.new_effective_rate.toFixed(2) + '%' : '&mdash;') + '</td>'
                     + '<td style="padding:8px;text-align:right;color:' + dirColor + ';">' + delta + '</td>'
                     + '<td style="padding:8px;text-align:right;">' + expStr + '</td>'
                     + '<td style="padding:8px;color:#aaa;">' + (r.review_reason || r.applicable_fta || '') + '</td>'
@@ -4453,7 +4882,7 @@ def agent_detail(agent_id):
                 });
                 html += '</table>';
                 html += '<div style="font-size:0.65rem;color:#F76C6C;margin-top:8px;">'
-                  + '* ILLUSTRATIVE stub volumes — not live ERP data. '
+                  + '* ILLUSTRATIVE stub volumes &mdash; not live ERP data. '
                   + '<a href="/api/tariff-shock" style="color:#0050b3;">Raw JSON</a></div>';
                 c.innerHTML = html;
               }
@@ -4466,7 +4895,7 @@ def agent_detail(agent_id):
                       var lbl = data.industry_display_name || data.active_industry || 'this industry';
                       var ac = document.getElementById('ts-alerts-container');
                       var rc = document.getElementById('ts-report-container');
-                      if (ac) ac.innerHTML = '<em style="color:#aaa;font-size:0.82rem;">No exposure alerts for ' + lbl + ' yet — coverage expanding.</em>';
+                      if (ac) ac.innerHTML = '<em style="color:#aaa;font-size:0.82rem;">No exposure alerts for ' + lbl + ' yet &mdash; coverage expanding.</em>';
                       if (rc) rc.innerHTML = '<em style="color:#aaa;font-size:0.82rem;">No exposure data for ' + lbl + '.</em>';
                       return;
                     }
@@ -4530,12 +4959,12 @@ def agent_detail(agent_id):
           <div>
             <div class="ai-label">AI Agent Analysis</div>
             <div class="ai-text" id="agent-ai-text">
-              <span class="ai-loading">Generating analysis…</span>
+              <span class="ai-loading">Generating analysis&hellip;</span>
             </div>
           </div>
         </div>
         <div class="section-card">
-          <div class="section-card-header">📊 Agent Output</div>
+          <div class="section-card-header">ðŸ“Š Agent Output</div>
           <div style="padding:40px;text-align:center;color:#aaa;font-size:0.88rem;">
             Agent data will render here once the live data pipeline is connected.
           </div>
